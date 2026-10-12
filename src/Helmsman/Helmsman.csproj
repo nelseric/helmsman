@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>netstandard2.1</TargetFramework>
+    <AssemblyName>Helmsman</AssemblyName>
+    <RootNamespace>Helmsman</RootNamespace>
+    <LangVersion>latest</LangVersion>
+    <ValheimDir Condition="'$(ValheimDir)' == ''">$(HOME)/.local/share/Steam/steamapps/common/Valheim</ValheimDir>
+    <ManagedDir>$(ValheimDir)/valheim_Data/Managed</ManagedDir>
+    <RestoreAdditionalProjectSources>https://nuget.bepinex.dev/v3/index.json</RestoreAdditionalProjectSources>
+    <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <NoWarn>$(NoWarn);MSB3277</NoWarn>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="BepInEx.Core" Version="5.4.21" PrivateAssets="all" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Reference Include="assembly_valheim" HintPath="$(ManagedDir)/assembly_valheim.dll" Private="false" />
+    <Reference Include="UnityEngine" HintPath="$(ManagedDir)/UnityEngine.dll" Private="false" />
+    <Reference Include="UnityEngine.CoreModule" HintPath="$(ManagedDir)/UnityEngine.CoreModule.dll" Private="false" />
+  </ItemGroup>
+
+  <!-- Installs the plugin into the game's BepInEx folder; copy-then-rename so a running game keeps its loaded copy. -->
+  <Target Name="DeployToValheim" AfterTargets="Build" Condition="Exists('$(ValheimDir)/BepInEx/plugins')">
+    <PropertyGroup>
+      <DeployDir>$(ValheimDir)/BepInEx/plugins/Helmsman</DeployDir>
+    </PropertyGroup>
+    <MakeDir Directories="$(DeployDir)" />
+    <Exec Command="cp &quot;$(TargetPath)&quot; &quot;$(DeployDir)/Helmsman.dll.tmp&quot; &amp;&amp; mv -f &quot;$(DeployDir)/Helmsman.dll.tmp&quot; &quot;$(DeployDir)/Helmsman.dll&quot;" />
+  </Target>
+
+</Project>
