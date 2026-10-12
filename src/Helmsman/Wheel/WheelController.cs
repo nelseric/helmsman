@@ -8,28 +8,10 @@ namespace Helmsman.Wheel
     // Owns the wheel on a background thread: reads its angle/buttons and drives a position-following constant force.
     internal sealed class WheelController : IDisposable
     {
-        public sealed class Settings
-        {
-            public string DevicePath = "";
-            public float FallbackRangeDegrees = 900f;
-            public float MaxForce = 0.7f;
-            public float Stiffness = 0.03f;
-            public float Damping = 0.0015f;
-            public float DeadbandDegrees = 0.5f;
-            public float MinForce = 0.12f;
-            public bool InvertForce = false;
-            public float IdleAutocenter = 0.25f;
-            public string LogPath = "";
-        }
-
         private const int LoopSleepMs = 2;
-        private const float MinForceRampDegrees = 2f;
-        private const float TargetVelocitySmoothingSeconds = 0.03f;
-        private const float TargetCorrectionGain = 0.25f;
-        private const float RudderLeadSeconds = 0.05f;
-        private const float MinForceFadeDegreesPerSecond = 30f;
 
-        private readonly Settings _settings;
+        private readonly WheelSettings _settings;
+        private readonly ForceModel _force;
         private readonly Action<string> _log;
         private readonly Thread _thread;
         private volatile bool _running = true;
@@ -47,12 +29,11 @@ namespace Helmsman.Wheel
         private volatile float _targetVelocity;
         private long _targetStamp;
         private long _seenTargetStamp;
-        private float _trackedTarget;
-        private float _smoothTargetVelocity;
 
-        public WheelController(Settings settings, Action<string> log)
+        public WheelController(WheelSettings settings, Action<string> log)
         {
             _settings = settings;
+            _force = new ForceModel(settings);
             _log = log;
             _thread = new Thread(Run) { IsBackground = true, Name = "Helmsman wheel" };
             _thread.Start();
@@ -178,12 +159,15 @@ namespace Helmsman.Wheel
                     {
                         SetAutocenter(dev, follow ? 0f : _settings.IdleAutocenter);
                         wasFollowing = follow;
-                        _trackedTarget = _targetAngle;
-                        _smoothTargetVelocity = _targetVelocity;
+                        _force.Reset(_targetAngle, _targetVelocity);
                     }
 
-                    float force = follow ? ComputeForce(angle, vel, dt) : 0f;
+                    long stamp = Interlocked.Read(ref _targetStamp);
+                    bool newSample = stamp != _seenTargetStamp;
+                    _seenTargetStamp = stamp;
+                    float force = follow ? _force.Step(dt, angle, vel, _targetAngle, _targetVelocity, newSample, _forceCap) : 0f;
                     LastForce = force;
+                    LastTarget = _force.Target;
 
                     if (_settings.LogPath != logPath)
                     {
@@ -231,36 +215,6 @@ namespace Helmsman.Wheel
                 }
                 SetAutocenter(dev, _settings.IdleAutocenter);
             }
-        }
-
-        private float ComputeForce(float angle, float vel, float dt)
-        {
-            // Game updates arrive in frame-timed bursts, so advance our own copy of the rudder at its rate and only nudge it toward each update.
-            _smoothTargetVelocity += (_targetVelocity - _smoothTargetVelocity) * (dt / (TargetVelocitySmoothingSeconds + dt));
-            float tv = _smoothTargetVelocity;
-            _trackedTarget += tv * dt;
-            long stamp = Interlocked.Read(ref _targetStamp);
-            if (stamp != _seenTargetStamp)
-            {
-                _seenTargetStamp = stamp;
-                _trackedTarget += (_targetAngle - _trackedTarget) * TargetCorrectionGain;
-            }
-            // Free zone just ahead of a moving rudder so keeping up costs no effort; it never pulls the wheel past the rudder.
-            float lead = _trackedTarget + tv * RudderLeadSeconds;
-            float lo = Math.Min(_trackedTarget, lead), hi = Math.Max(_trackedTarget, lead);
-            float err = angle < lo ? lo - angle : angle > hi ? hi - angle : 0f;
-            LastTarget = _trackedTarget;
-
-            float db = _settings.DeadbandDegrees;
-            err = Math.Abs(err) <= db ? 0f : err - Math.Sign(err) * db;
-            // Damping only resists moving faster than the rudder; pushing a slower wheel along would let wheel and rudder chase each other.
-            float overspeed = vel - tv;
-            bool resists = tv == 0f || Math.Sign(overspeed) == Math.Sign(tv);
-            float force = _settings.Stiffness * err - (resists ? _settings.Damping * overspeed : 0f);
-            // Overcome static gearbox friction: fades in over the first few degrees (no buzz at the target) and out as the wheel moves.
-            float minForceScale = Math.Min(1f, Math.Abs(err) / MinForceRampDegrees) * Math.Max(0f, 1f - Math.Abs(vel) / MinForceFadeDegreesPerSecond);
-            force += Math.Sign(err) * _settings.MinForce * minForceScale;
-            return Clamp(force, -_forceCap, _forceCap);
         }
 
         private static void SetAutocenter(WheelDevice dev, float strength) =>

@@ -1,10 +1,11 @@
 using System;
 using System.Globalization;
 using System.Threading;
+using Helmsman.Core;
 using Helmsman.Wheel;
 
 // Standalone wheel test: `info`, `force <-1..1> [seconds]`, `hold <degrees> [seconds]`, `track [speed] [amplitude] [seconds] [fps]`, `sim [rudderSpeed] [degreesAtFullRudder] [log.csv]`, or `kbd [pressSeconds]`.
-var settings = new WheelController.Settings { LogPath = Environment.GetEnvironmentVariable("HELMSMAN_LOG") ?? "" };
+var settings = new WheelSettings { LogPath = Environment.GetEnvironmentVariable("HELMSMAN_LOG") ?? "" };
 string mode = args.Length > 0 ? args[0] : "info";
 float Arg(int i, float fallback) => args.Length > i ? float.Parse(args[i], CultureInfo.InvariantCulture) : fallback;
 var stop = false;
@@ -111,8 +112,8 @@ if (mode == "sim" || mode == "kbd")
     csv?.WriteLine("ms,wheel,rudderDeg,rudderRate,force");
     var simStart = DateTime.UtcNow;
     const float dt = 0.02f;
+    var helm = new HelmController(new HelmSettings { DegreesAtFullRudder = fullDeg });
     float rudder = Math.Clamp(controller.AngleDegrees / fullDeg, -1f, 1f), rudderAtRelease = float.NaN;
-    bool synced = false, keyboardResync = false;
     int tick = 0;
     while (!stop)
     {
@@ -121,32 +122,17 @@ if (mode == "sim" || mode == "kbd")
         float keyboard = kbd && t > 0.5 && t < 0.5 + pressSeconds ? 1f : 0f;
         if (kbd && keyboard == 0f && t >= 0.5 + pressSeconds + 1 && float.IsNaN(rudderAtRelease)) rudderAtRelease = rudder;
 
-        float target = Math.Clamp(controller.AngleDegrees / fullDeg, -1f, 1f);
-        float x = keyboard;
-        if (keyboard != 0f)
-        {
-            synced = false;
-            keyboardResync = true;
-        }
-        else
-        {
-            if (!synced && Math.Abs(target - rudder) * fullDeg <= (keyboardResync ? 2f : 15f)) { synced = true; keyboardResync = false; }
-            if (synced)
-            {
-                float step = (0.5f + 0.5f * Math.Abs(rudder)) * rudderSpeed * dt;
-                float delta = target - rudder;
-                x = Math.Abs(delta) < 0.001f ? 0f : Math.Clamp(delta / step, -1f, 1f);
-            }
-        }
-        float rate = x * (0.5f + 0.5f * Math.Abs(rudder)) * rudderSpeed;
-        rudder = Math.Clamp(rudder + rate * dt, -1f, 1f);
-        if (Math.Abs(rudder) >= 1f && Math.Sign(rate) == Math.Sign(rudder)) rate = 0f;
-        controller.Follow(rudder * fullDeg, rate * fullDeg);
-        csv?.WriteLine(FormattableString.Invariant($"{(DateTime.UtcNow - simStart).TotalMilliseconds:0},{controller.AngleDegrees:0.00},{rudder * fullDeg:0.00},{rate * fullDeg:0.0},{controller.LastForce:0.000}"));
+        var input = new HelmInput { WheelDegrees = controller.AngleDegrees, Rudder = rudder, RudderSpeed = rudderSpeed, DeltaTime = dt, ManualX = keyboard };
+        helm.Step(input, out float x, out _);
+        float rudderInput = ShipRudder.Input(rudder, x);
+        rudder = ShipRudder.Apply(rudder, x, rudderSpeed, dt);
+        helm.WheelTargetFor(rudder, rudderInput, rudderSpeed, out float wheelTarget, out float wheelTargetVelocity);
+        controller.Follow(wheelTarget, wheelTargetVelocity);
+        csv?.WriteLine(FormattableString.Invariant($"{(DateTime.UtcNow - simStart).TotalMilliseconds:0},{controller.AngleDegrees:0.00},{wheelTarget:0.00},{wheelTargetVelocity:0.0},{controller.LastForce:0.000}"));
         if (kbd && tick % 12 == 0)
             Console.WriteLine($"{t,5:0.00}s {(keyboard != 0 ? "D held " : "       ")} wheel {controller.AngleDegrees,7:0.0}°  rudder {rudder * fullDeg,7:0.0}°  force {controller.LastForce,6:+0.00;-0.00}");
         else if (!kbd && tick % 5 == 0)
-            Console.Write($"\rwheel {controller.AngleDegrees,7:0.0}°  rudder {rudder,6:+0.00;-0.00} ({rudder * fullDeg,7:0.0}°)  force {controller.LastForce,6:+0.00;-0.00}  {(synced ? "" : "syncing")}   ");
+            Console.Write($"\rwheel {controller.AngleDegrees,7:0.0}°  rudder {rudder,6:+0.00;-0.00} ({rudder * fullDeg,7:0.0}°)  force {controller.LastForce,6:+0.00;-0.00}  {(helm.Synced ? "" : "syncing")}   ");
         tick++;
         Thread.Sleep(20);
     }

@@ -4,27 +4,24 @@
     <TargetFramework>netstandard2.1</TargetFramework>
     <AssemblyName>Helmsman</AssemblyName>
     <RootNamespace>Helmsman</RootNamespace>
+    <Product>Helmsman</Product>
+    <Version>0.1.0</Version>
+    <BepInExPluginGuid>helmsman.wheel</BepInExPluginGuid>
     <LangVersion>latest</LangVersion>
-    <ValheimDir Condition="'$(ValheimDir)' == ''">$(HOME)/.local/share/Steam/steamapps/common/Valheim</ValheimDir>
-    <ManagedDir>$(ValheimDir)/valheim_Data/Managed</ManagedDir>
     <RestoreAdditionalProjectSources>https://nuget.bepinex.dev/v3/index.json</RestoreAdditionalProjectSources>
     <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
-    <NoWarn>$(NoWarn);MSB3277</NoWarn>
+    <ValheimDir Condition="'$(ValheimDir)' == ''">$(HOME)/.local/share/Steam/steamapps/common/Valheim</ValheimDir>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="BepInEx.Core" Version="5.4.21" PrivateAssets="all" />
+    <PackageReference Include="BepInEx.PluginInfoProps" Version="2.1.0" PrivateAssets="all" />
+    <PackageReference Include="UnityEngine.Modules" Version="6000.0.75" IncludeAssets="compile" PrivateAssets="all" />
   </ItemGroup>
 
-  <ItemGroup>
-    <Reference Include="assembly_valheim" HintPath="$(ManagedDir)/assembly_valheim.dll" Private="false" />
-    <Reference Include="UnityEngine" HintPath="$(ManagedDir)/UnityEngine.dll" Private="false" />
-    <Reference Include="UnityEngine.CoreModule" HintPath="$(ManagedDir)/UnityEngine.CoreModule.dll" Private="false" />
-  </ItemGroup>
-
-  <!-- Installs the plugin into the game's BepInEx folder; copy-then-rename so a running game keeps its loaded copy. -->
-  <Target Name="DeployToValheim" AfterTargets="Build" Condition="Exists('$(ValheimDir)/BepInEx/plugins')">
+  <!-- Installs the plugin into a local Valheim BepInEx folder, if present; copy-then-rename so a running game keeps its loaded copy. -->
+  <Target Name="DeployToValheim" AfterTargets="Build" Condition="'$(CI)' != 'true' And Exists('$(ValheimDir)/BepInEx/plugins')">
     <PropertyGroup>
       <DeployDir>$(ValheimDir)/BepInEx/plugins/Helmsman</DeployDir>
     </PropertyGroup>
