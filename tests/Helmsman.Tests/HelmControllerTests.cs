@@ -13,10 +13,10 @@ namespace Helmsman.Tests
         private static HelmController NewHelm(bool invert = false) =>
             new HelmController(new HelmSettings { DegreesAtFullRudder = FullDeg, InvertSteering = invert, SyncToleranceDegrees = 15f });
 
-        private static HelmInput Input(float wheelDeg, float rudder, float manualX = 0f, float manualZ = 0f, bool center = false, int speedSteps = 0) =>
+        private static HelmInput Input(float wheelDeg, float rudder, float manualX = 0f, float manualZ = 0f, bool center = false, int speedSteps = 0, float wheelVel = 0f) =>
             new HelmInput
             {
-                WheelDegrees = wheelDeg, Rudder = rudder, RudderSpeed = RudderSpeed, DeltaTime = Dt,
+                WheelDegrees = wheelDeg, WheelVelocity = wheelVel, Rudder = rudder, RudderSpeed = RudderSpeed, DeltaTime = Dt,
                 ManualX = manualX, ManualZ = manualZ, CenterPressed = center, SpeedSteps = speedSteps,
             };
 
@@ -70,12 +70,36 @@ namespace Helmsman.Tests
             Assert.Equal(1f, x);
             Assert.False(helm.Synced);
 
-            // Released with the wheel trailing the rudder by 5°: rudder holds rather than stepping back.
-            helm.Step(Input(0.2f * FullDeg - 5f, 0.2f), out x, out _);
+            // Released with the wheel still catching up 5° behind: rudder holds rather than stepping back.
+            helm.Step(Input(0.2f * FullDeg - 5f, 0.2f, wheelVel: 150f), out x, out _);
             Assert.Equal(0f, x);
             Assert.False(helm.Synced);
 
-            helm.Step(Input(0.2f * FullDeg - 1f, 0.2f), out x, out _);
+            helm.Step(Input(0.2f * FullDeg - 1f, 0.2f, wheelVel: 150f), out x, out _);
+            Assert.True(helm.Synced);
+        }
+
+        [Fact]
+        public void AfterKeyboard_WheelRestingFewDegreesOff_TakesOver()
+        {
+            // Gearbox friction can stop the wheel a few degrees short of the rudder; it must still take over.
+            var helm = NewHelm();
+            helm.Step(Input(0f, 0.2f, manualX: 1f), out _, out _);
+            helm.Step(Input(0.2f * FullDeg - 4f, 0.2f, wheelVel: 150f), out _, out _);
+            Assert.False(helm.Synced);
+            helm.Step(Input(0.2f * FullDeg - 3f, 0.2f, wheelVel: 0f), out _, out _);
+            Assert.True(helm.Synced);
+        }
+
+        [Fact]
+        public void AfterKeyboard_WheelTurnedQuicklyThroughRudder_TakesOver()
+        {
+            // Turning fast can skip over the tolerance window between ticks; passing through the rudder counts.
+            var helm = NewHelm();
+            helm.Step(Input(0f, 0.2f, manualX: 1f), out _, out _);
+            helm.Step(Input(0.2f * FullDeg - 6f, 0.2f, wheelVel: 300f), out _, out _);
+            Assert.False(helm.Synced);
+            helm.Step(Input(0.2f * FullDeg + 6f, 0.2f, wheelVel: 300f), out _, out _);
             Assert.True(helm.Synced);
         }
 
@@ -107,14 +131,36 @@ namespace Helmsman.Tests
         }
 
         [Fact]
-        public void CenterButton_CancelsWhenWheelIsPulledAway()
+        public void CenterButton_KeepsGoingWhileWheelTrailsRudder()
+        {
+            // On ships with a fast rudder the wheel trails well over SyncToleranceDegrees on its way back.
+            var helm = NewHelm();
+            helm.Step(Input(0.4f * FullDeg, 0.4f), out _, out _);
+            helm.Step(Input(0.4f * FullDeg, 0.4f, center: true), out _, out _);
+            helm.Step(Input(0.3f * FullDeg + 30f, 0.3f, wheelVel: -200f), out float x, out _);
+            Assert.True(helm.Centering);
+            Assert.True(x < 0f);
+        }
+
+        [Fact]
+        public void CenterButton_CancelsWhenWheelTurnedAwayFromCenter()
         {
             var helm = NewHelm();
             helm.Step(Input(0.4f * FullDeg, 0.4f), out _, out _);
             helm.Step(Input(0.4f * FullDeg, 0.4f, center: true), out _, out _);
             Assert.True(helm.Centering);
 
-            helm.Step(Input(0.4f * FullDeg + 40f, 0.4f), out _, out _);
+            helm.Step(Input(0.4f * FullDeg + 5f, 0.39f, wheelVel: 100f), out _, out _);
+            Assert.False(helm.Centering);
+        }
+
+        [Fact]
+        public void CenterButton_CancelsWhenWheelHeldFarBack()
+        {
+            var helm = NewHelm();
+            helm.Step(Input(0.4f * FullDeg, 0.4f), out _, out _);
+            helm.Step(Input(0.4f * FullDeg, 0.4f, center: true), out _, out _);
+            helm.Step(Input(0.4f * FullDeg, 0.2f), out _, out _);
             Assert.False(helm.Centering);
         }
 

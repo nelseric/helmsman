@@ -136,6 +136,7 @@ namespace Helmsman
             var input = new HelmInput
             {
                 WheelDegrees = _wheel.AngleDegrees,
+                WheelVelocity = _wheel.VelocityDegreesPerSecond,
                 Rudder = _game.RudderValue(ship),
                 RudderSpeed = _game.RudderSpeed(ship),
                 DeltaTime = Time.fixedDeltaTime,

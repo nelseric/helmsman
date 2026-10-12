@@ -13,6 +13,7 @@ namespace Helmsman.Core
     internal struct HelmInput
     {
         public float WheelDegrees;
+        public float WheelVelocity;
         public float Rudder;
         public float RudderSpeed;
         public float DeltaTime;
@@ -28,14 +29,20 @@ namespace Helmsman.Core
     internal sealed class HelmController
     {
         private const float CenteredWheelDegrees = 3f;
-        private const float KeyboardResyncDegrees = 2f;
+        private const float TightResyncDegrees = 2f;
+        private const float WheelAtRestDegreesPerSecond = 20f;
+        private const float TightRestDegrees = 5f;
+        private const float GrabAwayFromCenterDegreesPerSecond = 30f;
+        private const float GrabHoldMultiple = 3f;
 
         private readonly HelmSettings _settings;
         private bool _synced;
-        private bool _keyboardResync;
+        private bool _tightResync;
         private bool _centering;
         private int _pendingSpeedSteps;
         private bool _injectedSpeedLastTick;
+        private float _lastError = float.NaN;
+        private int _centerFromSide;
 
         public HelmController(HelmSettings settings) => _settings = settings;
 
@@ -46,10 +53,11 @@ namespace Helmsman.Core
         public void Reset()
         {
             _synced = false;
-            _keyboardResync = false;
+            _tightResync = false;
             _centering = false;
             _pendingSpeedSteps = 0;
             _injectedSpeedLastTick = false;
+            _lastError = float.NaN;
         }
 
         // Returns the dir.x / dir.z to pass to Ship.ApplyControlls this tick.
@@ -62,13 +70,25 @@ namespace Helmsman.Core
             x = input.ManualX;
             z = input.ManualZ;
 
-            if (input.CenterPressed) _centering = true;
+            if (input.CenterPressed && !_centering)
+            {
+                _centering = true;
+                _centerFromSide = Math.Sign(rudder);
+            }
             if (_centering)
             {
-                // Steer the rudder to straight; the wheel follows it. Grabbing the wheel away from the rudder cancels.
-                bool grabbed = Math.Abs(target - rudder) * deg > _settings.SyncToleranceDegrees;
-                bool arrived = Math.Abs(rudder) < 0.001f && Math.Abs(input.WheelDegrees) < CenteredWheelDegrees;
-                if (manualSteer || grabbed || arrived) _centering = false;
+                // The wheel trails the rudder home and may overshoot center; only pulling it back toward the starting side cancels.
+                float backSpeed = input.WheelVelocity * Math.Sign(input.WheelDegrees) * _centerFromSide;
+                bool pulledBack = backSpeed > GrabAwayFromCenterDegreesPerSecond && input.WheelDegrees * _centerFromSide > CenteredWheelDegrees;
+                bool homeward = -input.WheelVelocity * _centerFromSide > WheelAtRestDegreesPerSecond;
+                bool heldBack = !homeward && (target - rudder) * _centerFromSide * deg > _settings.SyncToleranceDegrees * GrabHoldMultiple;
+                bool arrived = Math.Abs(rudder) < 0.001f;
+                if (manualSteer || pulledBack || heldBack || arrived)
+                {
+                    _centering = false;
+                    // Hand back to the wheel only once it has caught up, so a wheel still swinging home can't drag the rudder.
+                    StartTightResync();
+                }
                 else
                 {
                     target = 0f;
@@ -78,18 +98,21 @@ namespace Helmsman.Core
 
             if (manualSteer)
             {
-                _synced = false;
-                _keyboardResync = true;
+                StartTightResync();
             }
             else
             {
-                // After keyboard steering, wait for the wheel to catch up so the rudder doesn't step back to a trailing wheel.
-                float tolerance = _keyboardResync ? KeyboardResyncDegrees : _settings.SyncToleranceDegrees;
-                if (!_synced && Math.Abs(target - rudder) * deg <= tolerance)
+                // Take over when the wheel is close (tightly so after keyboard/centering), passes through the rudder, or rests near it despite friction.
+                float error = (target - rudder) * deg;
+                float tolerance = _tightResync ? TightResyncDegrees : _settings.SyncToleranceDegrees;
+                bool crossed = !float.IsNaN(_lastError) && Math.Sign(error) != Math.Sign(_lastError);
+                bool atRestNearby = Math.Abs(input.WheelVelocity) < WheelAtRestDegreesPerSecond && Math.Abs(error) <= (_tightResync ? TightRestDegrees : _settings.SyncToleranceDegrees);
+                if (!_synced && (Math.Abs(error) <= tolerance || crossed || atRestNearby))
                 {
                     _synced = true;
-                    _keyboardResync = false;
+                    _tightResync = false;
                 }
+                _lastError = error;
                 if (_synced)
                 {
                     // Matches Ship's own step so the rudder lands exactly on the target without overshoot.
@@ -122,6 +145,13 @@ namespace Helmsman.Core
             float scale = _settings.DegreesAtFullRudder * Sign;
             angle = rudder * scale;
             velocity = rate * scale;
+        }
+
+        private void StartTightResync()
+        {
+            _synced = false;
+            _tightResync = true;
+            _lastError = float.NaN;
         }
 
         private float Sign => _settings.InvertSteering ? -1f : 1f;

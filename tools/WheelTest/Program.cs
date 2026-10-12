@@ -4,7 +4,7 @@ using System.Threading;
 using Helmsman.Core;
 using Helmsman.Wheel;
 
-// Standalone wheel test: `info`, `force <-1..1> [seconds]`, `hold <degrees> [seconds]`, `track [speed] [amplitude] [seconds] [fps]`, `sim [rudderSpeed] [degreesAtFullRudder] [log.csv]`, or `kbd [pressSeconds]`.
+// Standalone wheel test: `info`, `force <-1..1> [seconds]`, `hold <degrees> [seconds]`, `track [speed] [amplitude] [seconds] [fps]`, `sim [rudderSpeed] [degreesAtFullRudder] [log.csv]`, `kbd [pressSeconds]`, `center [rudderSpeed]`, or `coast [force] [seconds]`.
 var settings = new WheelSettings { LogPath = Environment.GetEnvironmentVariable("HELMSMAN_LOG") ?? "" };
 string mode = args.Length > 0 ? args[0] : "info";
 float Arg(int i, float fallback) => args.Length > i ? float.Parse(args[i], CultureInfo.InvariantCulture) : fallback;
@@ -48,6 +48,26 @@ if (mode == "info")
         Console.Write($"\rangle {controller.AngleDegrees,8:0.0}°  velocity {controller.VelocityDegreesPerSecond,8:0}°/s   ");
         Thread.Sleep(20);
     }
+    return 0;
+}
+
+if (mode == "coast")
+{
+    // Push with a fixed force, then release with no force or centering spring, to measure the wheel's inertia and friction.
+    float level = Arg(1, 0.4f), pushSeconds = Arg(2, 0.15f);
+    settings.IdleAutocenter = 0f;
+    settings.Stiffness = 1f;
+    settings.Damping = 0f;
+    settings.MinForce = 0f;
+    settings.DeadbandDegrees = 0f;
+    controller.StopFollowing();
+    Thread.Sleep(300);
+    var sw = System.Diagnostics.Stopwatch.StartNew();
+    while (sw.Elapsed.TotalSeconds < pushSeconds) { controller.Follow(controller.AngleDegrees + Math.Sign(level) * 1000f, 0f, Math.Abs(level)); Thread.Sleep(1); }
+    controller.StopFollowing();
+    float releaseAngle = controller.AngleDegrees, releaseVelocity = controller.VelocityDegreesPerSecond;
+    Thread.Sleep(1500);
+    Console.WriteLine($"push {level:+0.00;-0.00} for {pushSeconds:0.000}s: released at {releaseVelocity:0}°/s, coasted {controller.AngleDegrees - releaseAngle:+0.0;-0.0}°");
     return 0;
 }
 
@@ -103,11 +123,11 @@ if (mode == "track")
     return 0;
 }
 
-if (mode == "sim" || mode == "kbd")
+if (mode == "sim" || mode == "kbd" || mode == "center")
 {
     // Replicates Ship.ApplyControlls at 50 Hz with the plugin's steering logic. `kbd` holds "D" for a while, then checks the rudder stops.
-    bool kbd = mode == "kbd";
-    float rudderSpeed = kbd ? 0.5f : Arg(1, 0.5f), fullDeg = kbd ? 450f : Arg(2, 450f), pressSeconds = kbd ? Arg(1, 1f) : 0f;
+    bool kbd = mode == "kbd" || mode == "center", centerTest = mode == "center";
+    float rudderSpeed = centerTest ? Arg(1, 0.5f) : kbd ? 0.5f : Arg(1, 0.5f), fullDeg = kbd ? 450f : Arg(2, 450f), pressSeconds = centerTest ? 0f : kbd ? Arg(1, 1f) : 0f;
     using var csv = !kbd && args.Length > 3 ? new System.IO.StreamWriter(args[3]) : null;
     csv?.WriteLine("ms,wheel,rudderDeg,rudderRate,force");
     var simStart = DateTime.UtcNow;
@@ -122,7 +142,7 @@ if (mode == "sim" || mode == "kbd")
         float keyboard = kbd && t > 0.5 && t < 0.5 + pressSeconds ? 1f : 0f;
         if (kbd && keyboard == 0f && t >= 0.5 + pressSeconds + 1 && float.IsNaN(rudderAtRelease)) rudderAtRelease = rudder;
 
-        var input = new HelmInput { WheelDegrees = controller.AngleDegrees, Rudder = rudder, RudderSpeed = rudderSpeed, DeltaTime = dt, ManualX = keyboard };
+        var input = new HelmInput { WheelDegrees = controller.AngleDegrees, WheelVelocity = controller.VelocityDegreesPerSecond, Rudder = rudder, RudderSpeed = rudderSpeed, DeltaTime = dt, ManualX = keyboard, CenterPressed = centerTest && tick == 25 };
         helm.Step(input, out float x, out _);
         float rudderInput = ShipRudder.Input(rudder, x);
         rudder = ShipRudder.Apply(rudder, x, rudderSpeed, dt);
@@ -139,11 +159,12 @@ if (mode == "sim" || mode == "kbd")
     if (kbd)
     {
         float drift = (rudder - rudderAtRelease) * fullDeg;
-        Console.WriteLine($"Rudder moved {drift:+0.0;-0.0}° in the last 2s after release: {(Math.Abs(drift) < 2f ? "stable" : "RUNAWAY")}");
+        if (centerTest) Console.WriteLine($"Centered: rudder {rudder * fullDeg:+0.0;-0.0}°, wheel {controller.AngleDegrees:+0.0;-0.0}°, drift in the last 2s {drift:+0.0;-0.0}°");
+        else Console.WriteLine($"Rudder moved {drift:+0.0;-0.0}° in the last 2s after release: {(Math.Abs(drift) < 2f ? "stable" : "RUNAWAY")}");
     }
     else Console.WriteLine();
     return 0;
 }
 
-Console.WriteLine("Usage: WheelTest [info | force <-1..1> [seconds] | hold <degrees> [seconds] | track [speed] [amplitude] [seconds] [fps] | sim [rudderSpeed] [degreesAtFullRudder] [log.csv] | kbd [pressSeconds]]");
+Console.WriteLine("Usage: WheelTest [info | force <-1..1> [seconds] | hold <degrees> [seconds] | track [speed] [amplitude] [seconds] [fps] | sim [rudderSpeed] [degreesAtFullRudder] [log.csv] | kbd [pressSeconds] | center [rudderSpeed] | coast [force] [seconds]]");
 return 1;
