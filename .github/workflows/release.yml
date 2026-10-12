@@ -27,15 +27,8 @@ jobs:
       - name: Test
         run: dotnet test -c Release
 
-      - name: Build plugin
-        run: dotnet build src/Helmsman -c Release -p:Version="$VERSION"
-
       - name: Package
-        run: |
-          dest=dist/BepInEx/plugins/Helmsman
-          mkdir -p "$dest"
-          cp src/Helmsman/bin/Release/netstandard2.1/Helmsman.dll README.md LICENSE "$dest/"
-          (cd dist && zip -r "../Helmsman-$VERSION.zip" BepInEx)
+        run: scripts/package.sh "$VERSION"
 
       - name: Publish release
         env:

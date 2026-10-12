@@ -46,6 +46,9 @@ namespace Helmsman.Core
 
         public HelmController(HelmSettings settings) => _settings = settings;
 
+        // Receives a line per state change (centering, wheel taking over), for debugging.
+        public Action<string> Log { get; set; }
+
         public bool Synced => _synced;
         public bool Centering => _centering;
 
@@ -74,6 +77,7 @@ namespace Helmsman.Core
             {
                 _centering = true;
                 _centerFromSide = Math.Sign(rudder);
+                Log?.Invoke($"Centering from rudder {rudder * deg:0.0}°, wheel {input.WheelDegrees:0.0}°");
             }
             if (_centering)
             {
@@ -85,6 +89,8 @@ namespace Helmsman.Core
                 bool arrived = Math.Abs(rudder) < 0.001f;
                 if (manualSteer || pulledBack || heldBack || arrived)
                 {
+                    string why = arrived ? "arrived" : manualSteer ? "keyboard steering" : pulledBack ? "wheel pulled back" : "wheel held back";
+                    Log?.Invoke($"Centering ended ({why}): rudder {rudder * deg:0.0}°, wheel {input.WheelDegrees:0.0}° at {input.WheelVelocity:0}°/s");
                     _centering = false;
                     // Hand back to the wheel only once it has caught up, so a wheel still swinging home can't drag the rudder.
                     StartTightResync();
@@ -109,6 +115,7 @@ namespace Helmsman.Core
                 bool atRestNearby = Math.Abs(input.WheelVelocity) < WheelAtRestDegreesPerSecond && Math.Abs(error) <= (_tightResync ? TightRestDegrees : _settings.SyncToleranceDegrees);
                 if (!_synced && (Math.Abs(error) <= tolerance || crossed || atRestNearby))
                 {
+                    Log?.Invoke($"Wheel took over ({(Math.Abs(error) <= tolerance ? "close" : crossed ? "crossed" : "at rest nearby")}): rudder {rudder * deg:0.0}°, wheel {input.WheelDegrees:0.0}°");
                     _synced = true;
                     _tightResync = false;
                 }

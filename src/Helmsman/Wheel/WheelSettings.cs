@@ -3,6 +3,8 @@ namespace Helmsman.Wheel
     // Device and force-feedback tuning, read live by the wheel thread.
     internal sealed class WheelSettings
     {
+        // Auto, Evdev or SDL.
+        public string Backend = WheelDevices.Auto;
         public string DevicePath = "";
         public float FallbackRangeDegrees = 900f;
         public float MaxForce = 0.7f;

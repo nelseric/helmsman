@@ -5,7 +5,7 @@ using Helmsman.Core;
 using Helmsman.Wheel;
 
 // Standalone wheel test: `info`, `force <-1..1> [seconds]`, `hold <degrees> [seconds]`, `track [speed] [amplitude] [seconds] [fps]`, `sim [rudderSpeed] [degreesAtFullRudder] [log.csv]`, `kbd [pressSeconds]`, `center [rudderSpeed]`, or `coast [force] [seconds]`.
-var settings = new WheelSettings { LogPath = Environment.GetEnvironmentVariable("HELMSMAN_LOG") ?? "" };
+var settings = new WheelSettings { LogPath = Environment.GetEnvironmentVariable("HELMSMAN_LOG") ?? "", Backend = Environment.GetEnvironmentVariable("HELMSMAN_BACKEND") ?? WheelDevices.Auto };
 string mode = args.Length > 0 ? args[0] : "info";
 float Arg(int i, float fallback) => args.Length > i ? float.Parse(args[i], CultureInfo.InvariantCulture) : fallback;
 var stop = false;
@@ -43,8 +43,8 @@ if (mode == "info")
 {
     while (!stop)
     {
-        for (int code = 0x100; code < 0x300; code++)
-            if (controller.TakePresses(code) > 0) Console.WriteLine($"\nButton pressed: code {code}");
+        for (int button = 0; button < 256; button++)
+            if (controller.TakePresses(button) > 0) Console.WriteLine($"\nButton pressed: {button}");
         Console.Write($"\rangle {controller.AngleDegrees,8:0.0}°  velocity {controller.VelocityDegreesPerSecond,8:0}°/s   ");
         Thread.Sleep(20);
     }

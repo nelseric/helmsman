@@ -1,6 +1,5 @@
 using System;
 using System.Diagnostics;
-using System.Runtime.InteropServices;
 using System.Threading;
 
 namespace Helmsman.Wheel
@@ -16,7 +15,7 @@ namespace Helmsman.Wheel
         private readonly Thread _thread;
         private volatile bool _running = true;
 
-        private readonly int[] _presses = new int[0x300];
+        private readonly int[] _presses = new int[256];
 
         private volatile bool _connected;
         private volatile float _angle;
@@ -59,8 +58,8 @@ namespace Helmsman.Wheel
 
         public void StopFollowing() => _follow = false;
 
-        // Returns and clears the number of presses of an evdev key code since the last call.
-        public int TakePresses(int code) => code >= 0 && code < _presses.Length ? Interlocked.Exchange(ref _presses[code], 0) : 0;
+        // Returns and clears the number of presses of a button (numbered from 0) since the last call.
+        public int TakePresses(int button) => button >= 0 && button < _presses.Length ? Interlocked.Exchange(ref _presses[button], 0) : 0;
 
         public void ClearPresses()
         {
@@ -71,10 +70,10 @@ namespace Helmsman.Wheel
         {
             while (_running)
             {
-                WheelDevice device = null;
+                IWheelDevice device = null;
                 try
                 {
-                    device = WheelDevice.Open(_settings.DevicePath, _log);
+                    device = WheelDevices.Open(_settings, _log);
                     if (device == null)
                     {
                         Sleep(3000);
@@ -93,27 +92,29 @@ namespace Helmsman.Wheel
                     device?.Dispose();
                 }
             }
+            SdlWheel.Shutdown();
         }
 
-        private void Drive(WheelDevice dev)
+        private void Drive(IWheelDevice dev)
         {
-            float range = dev.SysfsRangeDegrees ?? _settings.FallbackRangeDegrees;
-            _deviceName = dev.Name;
-            _log?.Invoke($"Using {dev.Name} ({dev.Vendor:x4}:{dev.Product:x4}) at {dev.Path}, range {range}°");
+            float range = dev.RangeDegrees ?? _settings.FallbackRangeDegrees;
+            _deviceName = dev.Description;
+            _log?.Invoke($"Using {dev.Description}, range {range}°");
 
-            Evdev.WriteEvent(dev.Fd, Evdev.EV_FF, Evdev.FF_GAIN, 0xFFFF);
-            int effectId = -1;
+            bool hasLevel = false;
             short lastLevel = 0;
             bool wasFollowing = false;
-            SetAutocenter(dev, _settings.IdleAutocenter);
+            dev.SetAutocenter(_settings.IdleAutocenter);
 
-            int rawX = dev.InitialX;
-            float mid = (dev.AbsMin + dev.AbsMax) / 2f;
-            float half = Math.Max(1f, (dev.AbsMax - dev.AbsMin) / 2f);
-            float degPerUnit = range / 2f / half;
-            float lastAngle = (rawX - mid) * degPerUnit;
+            Action<int> pressed = button => { if (button < _presses.Length) Interlocked.Increment(ref _presses[button]); };
+            float position;
+            do
+            {
+                if (!dev.Poll(pressed, out position)) return;
+                Thread.Sleep(LoopSleepMs);
+            } while (float.IsNaN(position) && _running);
+            float lastAngle = position * range / 2f;
             long lastTick = Stopwatch.GetTimestamp();
-            var buf = new byte[Evdev.InputEventSize * 64];
             _connected = true;
             System.IO.StreamWriter log = null;
             string logPath = "";
@@ -123,32 +124,16 @@ namespace Helmsman.Wheel
             {
                 while (_running)
                 {
-                    // Drain pending input events.
-                    while (true)
+                    if (!dev.Poll(pressed, out position))
                     {
-                        long n = (long)Evdev.read(dev.Fd, buf, (IntPtr)buf.Length);
-                        if (n < 0)
-                        {
-                            int errno = Marshal.GetLastWin32Error();
-                            if (errno == Evdev.EAGAIN) break;
-                            _log?.Invoke($"Wheel disconnected (errno {errno})");
-                            return;
-                        }
-                        if (n == 0) break;
-                        for (int off = 0; off + Evdev.InputEventSize <= n; off += Evdev.InputEventSize)
-                        {
-                            ushort type = BitConverter.ToUInt16(buf, off + 16);
-                            ushort code = BitConverter.ToUInt16(buf, off + 18);
-                            int value = BitConverter.ToInt32(buf, off + 20);
-                            if (type == Evdev.EV_ABS && code == Evdev.ABS_X) rawX = value;
-                            else if (type == Evdev.EV_KEY && value == 1 && code < _presses.Length) Interlocked.Increment(ref _presses[code]);
-                        }
+                        _log?.Invoke("Wheel disconnected");
+                        return;
                     }
 
                     long now = Stopwatch.GetTimestamp();
                     float dt = Math.Max(1e-4f, (float)(now - lastTick) / Stopwatch.Frequency);
                     lastTick = now;
-                    float angle = (rawX - mid) * degPerUnit;
+                    float angle = position * range / 2f;
                     float vel = _velocity + ((angle - lastAngle) / dt - _velocity) * Math.Min(1f, dt * 40f);
                     lastAngle = angle;
                     _angle = angle;
@@ -157,7 +142,7 @@ namespace Helmsman.Wheel
                     bool follow = _follow;
                     if (follow != wasFollowing)
                     {
-                        SetAutocenter(dev, follow ? 0f : _settings.IdleAutocenter);
+                        dev.SetAutocenter(follow ? 0f : _settings.IdleAutocenter);
                         wasFollowing = follow;
                         _force.Reset(_targetAngle, _targetVelocity);
                     }
@@ -190,14 +175,12 @@ namespace Helmsman.Wheel
                     log?.WriteLine(FormattableString.Invariant(
                         $"{logClock.Elapsed.TotalMilliseconds:0.0},{(follow ? 1 : 0)},{angle:0.00},{vel:0.0},{_targetAngle:0.00},{_targetVelocity:0.0},{LastTarget:0.00},{force:0.000}"));
                     short level = (short)Math.Round(Clamp(force, -1f, 1f) * 32767f * (_settings.InvertForce ? -1f : 1f));
-                    // The driver only resolves 8 bits of force, so skip sub-step updates.
-                    if (effectId < 0 || (level >> 8) != (lastLevel >> 8))
+                    // Wheels resolve about 8 bits of force, so skip sub-step updates.
+                    if (!hasLevel || (level >> 8) != (lastLevel >> 8))
                     {
-                        int id = Evdev.UploadConstant(dev.Fd, effectId, level);
-                        if (id >= 0)
+                        if (dev.SetForce(level))
                         {
-                            if (effectId < 0) Evdev.WriteEvent(dev.Fd, Evdev.EV_FF, (ushort)id, 1);
-                            effectId = id;
+                            hasLevel = true;
                             lastLevel = level;
                         }
                     }
@@ -208,17 +191,10 @@ namespace Helmsman.Wheel
             finally
             {
                 log?.Dispose();
-                if (effectId >= 0)
-                {
-                    Evdev.WriteEvent(dev.Fd, Evdev.EV_FF, (ushort)effectId, 0);
-                    Evdev.ioctl(dev.Fd, Evdev.EVIOCRMFF, (IntPtr)effectId);
-                }
-                SetAutocenter(dev, _settings.IdleAutocenter);
+                dev.SetForce(0);
+                dev.SetAutocenter(_settings.IdleAutocenter);
             }
         }
-
-        private static void SetAutocenter(WheelDevice dev, float strength) =>
-            Evdev.WriteEvent(dev.Fd, Evdev.EV_FF, Evdev.FF_AUTOCENTER, (int)(Clamp(strength, 0f, 1f) * 0xFFFF));
 
         private static float Clamp(float v, float min, float max) => v < min ? min : v > max ? max : v;
 

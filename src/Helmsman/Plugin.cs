@@ -14,6 +14,7 @@ namespace Helmsman
         internal static Plugin Instance;
 
         private ConfigEntry<bool> _enabled;
+        private ConfigEntry<string> _backend;
         private ConfigEntry<string> _devicePath;
         private ConfigEntry<float> _fallbackRange;
         private ConfigEntry<float> _degreesAtFullRudder;
@@ -50,8 +51,9 @@ namespace Helmsman
         {
             Instance = this;
             _enabled = Config.Bind("General", "Enabled", true, "Steer ships with the racing wheel.");
-            _devicePath = Config.Bind("Device", "DevicePath", "", "evdev device (e.g. /dev/input/event24). Empty = auto-detect the first force-feedback wheel.");
-            _fallbackRange = Config.Bind("Device", "FallbackRangeDegrees", 900f, "Wheel rotation range used if the driver does not report one.");
+            _backend = Config.Bind("Device", "Backend", WheelDevices.Auto, new ConfigDescription("How to talk to the wheel: Evdev (Linux only), SDL (SDL3, any OS), or Auto (Evdev on Linux, SDL elsewhere).", new AcceptableValueList<string>(WheelDevices.Auto, WheelDevices.Evdev, WheelDevices.Sdl)));
+            _devicePath = Config.Bind("Device", "DevicePath", "", "Evdev: device path such as /dev/input/event24. SDL: part of the wheel's name. Empty = the first force-feedback wheel.");
+            _fallbackRange = Config.Bind("Device", "FallbackRangeDegrees", 900f, "Wheel rotation range when the driver doesn't report one (always the case with SDL). Must match the range set in the wheel's driver software.");
             _degreesAtFullRudder = Config.Bind("Steering", "DegreesAtFullRudder", 450f, "Wheel angle (from center) that equals full rudder.");
             _invertSteering = Config.Bind("Steering", "InvertSteering", false, "Swap left/right steering.");
             _syncTolerance = Config.Bind("Steering", "SyncToleranceDegrees", 15f, "When taking the helm, the wheel must come within this many degrees of the rudder before it takes over.");
@@ -64,9 +66,9 @@ namespace Helmsman
             _idleCenterForce = Config.Bind("ForceFeedback", "IdleCenterForce", 0.5f, new ConfigDescription("Max force holding the wheel centered when not at the helm. 0 = use IdleAutocenter instead.", new AcceptableValueRange<float>(0f, 1f)));
             _idleCenterDelay = Config.Bind("ForceFeedback", "IdleCenterDelaySeconds", 3f, "After leaving the helm, the wheel stays free this long before it is centered.");
             _idleAutocenter = Config.Bind("ForceFeedback", "IdleAutocenter", 0.25f, new ConfigDescription("Driver's built-in centering spring when not at the helm and IdleCenterForce is 0 (0 = limp).", new AcceptableValueRange<float>(0f, 1f)));
-            _speedUpButtons = Config.Bind("Buttons", "SpeedUpButtons", "292,290", "Comma-separated evdev key codes that raise sail speed (G29: right paddle = 292, circle = 290).");
-            _speedDownButtons = Config.Bind("Buttons", "SpeedDownButtons", "293,288", "Comma-separated evdev key codes that lower sail speed (G29: left paddle = 293, cross = 288).");
-            _centerButtons = Config.Bind("Buttons", "CenterButtons", "294,295,298,299", "Comma-separated evdev key codes that swing the rudder (and wheel) back to straight (G29: R2 = 294, L2 = 295, R3 = 298, L3 = 299).");
+            _speedUpButtons = Config.Bind("Buttons", "SpeedUp", "4,2", "Comma-separated button numbers that raise sail speed (G29: right paddle = 4, circle = 2).");
+            _speedDownButtons = Config.Bind("Buttons", "SpeedDown", "5,0", "Comma-separated button numbers that lower sail speed (G29: left paddle = 5, cross = 0).");
+            _centerButtons = Config.Bind("Buttons", "Center", "6,7,10,11", "Comma-separated button numbers that swing the rudder (and wheel) back to straight (G29: R2 = 6, L2 = 7, R3 = 10, L3 = 11).");
             _logPath = Config.Bind("Debug", "LogPath", "", "If set, writes a CSV of wheel position, rudder target and force (~500 lines/s) to this file.");
 
             ApplySettings();
@@ -74,7 +76,7 @@ namespace Helmsman
 
             _game = GameApi.Resolve(msg => Logger.LogError(msg));
             if (_game == null) return;
-            _helm = new HelmController(_helmSettings);
+            _helm = new HelmController(_helmSettings) { Log = msg => { if (!string.IsNullOrEmpty(_logPath.Value)) Logger.LogInfo(msg); } };
             _wheel = new WheelController(_wheelSettings, msg => Logger.LogInfo(msg));
             _harmony = new Harmony(MyPluginInfo.PLUGIN_GUID);
             _harmony.Patch(_game.ApplyControlls,
@@ -84,6 +86,7 @@ namespace Helmsman
 
         private void ApplySettings()
         {
+            _wheelSettings.Backend = _backend.Value;
             _wheelSettings.DevicePath = _devicePath.Value;
             _wheelSettings.FallbackRangeDegrees = _fallbackRange.Value;
             _wheelSettings.MaxForce = _maxForce.Value;
@@ -131,6 +134,7 @@ namespace Helmsman
                 _helmShip = ship;
                 _helm.Reset();
                 _wheel.ClearPresses();
+                if (!string.IsNullOrEmpty(_logPath.Value)) Logger.LogInfo($"Took the helm of {((Component)ship).name}: rudder speed {_game.RudderSpeed(ship)}");
             }
 
             var input = new HelmInput

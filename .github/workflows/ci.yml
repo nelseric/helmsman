@@ -21,7 +21,11 @@ jobs:
       - name: Test
         run: dotnet test -c Release --no-build
 
+      - name: Package
+        run: scripts/package.sh "0.0.${{ github.run_number }}"
+
+      # Unzip into the Valheim folder, like a release.
       - uses: actions/upload-artifact@v7
         with:
           name: Helmsman
-          path: src/Helmsman/bin/Release/netstandard2.1/Helmsman.dll
+          path: dist/
