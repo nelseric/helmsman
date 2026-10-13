@@ -93,9 +93,10 @@ Settings live in `BepInEx/config/helmsman.wheel.cfg`, created on first launch. B
 | ForceFeedback | `IdleCenterForce` | `0.5` | Force holding the wheel centered away from the helm; `0` uses `IdleAutocenter` instead |
 | ForceFeedback | `IdleCenterDelaySeconds` | `3` | How long after leaving the helm before the wheel recenters |
 | ForceFeedback | `IdleAutocenter` | `0.25` | The driver's own centering spring, used when `IdleCenterForce` is `0` |
+| ForceFeedback | `ReleaseKickForce` | `0.4` | Brief push felt when gripping the wheel cancels centering; `0` turns it off |
 | Buttons | `SpeedUp` | `4,2` | Button numbers that raise sail speed |
 | Buttons | `SpeedDown` | `5,0` | Button numbers that lower sail speed |
-| Buttons | `Center` | `6,7,10,11` | Button numbers that straighten the rudder |
+| Buttons | `Center` | `6,7,10,11` | Button numbers that straighten the rudder. Grip the wheel to stop partway |
 | Debug | `LogPath` | *(empty)* | Write a CSV of wheel, rudder target and force (~500 lines/s) to this file |
 
 **Feel:** if the wheel feels heavy, lower `Stiffness` or `MaxForce`. If it doesn't settle on the rudder, raise `MinForce` slightly. If it buzzes at rest, raise `DeadbandDegrees` or lower `MinForce`.

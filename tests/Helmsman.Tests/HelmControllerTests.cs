@@ -103,11 +103,13 @@ namespace Helmsman.Tests
             Assert.True(helm.Synced);
         }
 
-        [Fact]
-        public void CenterButton_StraightensOnce_ThenReturnsToWheel()
+        [Theory]
+        [InlineData(1f)]
+        [InlineData(-1f)]
+        public void CenterButton_StraightensOnce_ThenReturnsToWheel(float side)
         {
             var helm = NewHelm();
-            float rudder = 0.4f;
+            float rudder = 0.4f * side;
             helm.Step(Input(rudder * FullDeg, rudder), out _, out _);
 
             bool pressed = true;
@@ -124,44 +126,166 @@ namespace Helmsman.Tests
             // Afterwards the wheel steers again; nothing pulls back to center.
             for (int i = 0; i < 50; i++)
             {
-                helm.Step(Input(45f, rudder), out float x, out _);
+                helm.Step(Input(45f * side, rudder), out float x, out _);
                 rudder = ShipRudder.Apply(rudder, x, RudderSpeed, Dt);
             }
-            Assert.Equal(0.1f, rudder, 3);
+            Assert.Equal(0.1f * side, rudder, 3);
         }
 
-        [Fact]
-        public void CenterButton_KeepsGoingWhileWheelTrailsRudder()
+        [Theory]
+        [InlineData(1f)]
+        [InlineData(-1f)]
+        public void CenterButton_KeepsGoingWhileWheelTrailsRudder(float side)
         {
             // On ships with a fast rudder the wheel trails well over SyncToleranceDegrees on its way back.
             var helm = NewHelm();
-            helm.Step(Input(0.4f * FullDeg, 0.4f), out _, out _);
-            helm.Step(Input(0.4f * FullDeg, 0.4f, center: true), out _, out _);
-            helm.Step(Input(0.3f * FullDeg + 30f, 0.3f, wheelVel: -200f), out float x, out _);
+            helm.Step(Input(0.4f * FullDeg * side, 0.4f * side), out _, out _);
+            helm.Step(Input(0.4f * FullDeg * side, 0.4f * side, center: true), out _, out _);
+            helm.Step(Input((0.3f * FullDeg + 30f) * side, 0.3f * side, wheelVel: -200f * side), out float x, out _);
             Assert.True(helm.Centering);
-            Assert.True(x < 0f);
+            Assert.True(x * side < 0f);
         }
 
-        [Fact]
-        public void CenterButton_CancelsWhenWheelTurnedAwayFromCenter()
+        [Theory]
+        [InlineData(1f)]
+        [InlineData(-1f)]
+        public void CenterButton_KeepsGoingWhileWheelStartsHome(float side)
+        {
+            // The wheel starts slowly at full lock while the rudder is already moving.
+            var helm = NewHelm();
+            helm.Step(Input(FullDeg * side, side), out _, out _);
+            helm.Step(Input(FullDeg * side, side, center: true), out _, out _);
+            helm.Step(Input((FullDeg - 2f) * side, 0.97f * side, wheelVel: -50f * side), out _, out _);
+            Assert.True(helm.Centering);
+        }
+
+        [Theory]
+        [InlineData(1f)]
+        [InlineData(-1f)]
+        public void CenterButton_CancelsWhenWheelTurnedAwayFromCenter(float side)
         {
             var helm = NewHelm();
-            helm.Step(Input(0.4f * FullDeg, 0.4f), out _, out _);
-            helm.Step(Input(0.4f * FullDeg, 0.4f, center: true), out _, out _);
+            helm.Step(Input(0.4f * FullDeg * side, 0.4f * side), out _, out _);
+            helm.Step(Input(0.4f * FullDeg * side, 0.4f * side, center: true), out _, out _);
             Assert.True(helm.Centering);
 
-            helm.Step(Input(0.4f * FullDeg + 5f, 0.39f, wheelVel: 100f), out _, out _);
+            helm.Step(Input((0.4f * FullDeg + 5f) * side, 0.39f * side, wheelVel: 100f * side), out _, out _);
             Assert.False(helm.Centering);
         }
 
-        [Fact]
-        public void CenterButton_CancelsWhenWheelHeldFarBack()
+        [Theory]
+        [InlineData(1f, 0f)]
+        [InlineData(-1f, 0f)]
+        [InlineData(1f, -40f)]
+        [InlineData(-1f, -40f)]
+        public void CenterButton_CancelsWhenGripped(float side, float creepSpeed)
+        {
+            // A firm grip stops the wheel, or lets it creep far slower than the rudder.
+            var helm = NewHelm();
+            float rudder = 0.6f * side, wheel = rudder * FullDeg;
+            helm.Step(Input(wheel, rudder), out _, out _);
+            helm.Step(Input(wheel, rudder, center: true), out float x, out _);
+            for (int i = 0; i < 15 && helm.Centering; i++)
+            {
+                rudder = ShipRudder.Apply(rudder, x, RudderSpeed, Dt);
+                wheel += creepSpeed * side * Dt;
+                helm.Step(Input(wheel, rudder, wheelVel: creepSpeed * side), out x, out _);
+            }
+            Assert.False(helm.Centering);
+            Assert.True(Math.Abs(wheel - rudder * FullDeg) < 25f, $"cancelled only {Math.Abs(wheel - rudder * FullDeg):0}° behind");
+        }
+
+        [Theory]
+        [InlineData(1f)]
+        [InlineData(-1f)]
+        public void CenterButton_BriefSlowWheelDoesNotCancel(float side)
+        {
+            // Starting from rest, the wheel trails the rudder while it speeds up.
+            var helm = NewHelm();
+            float rudder = 0.6f * side, wheel = rudder * FullDeg, vel = 0f;
+            helm.Step(Input(wheel, rudder), out _, out _);
+            helm.Step(Input(wheel, rudder, center: true), out float x, out _);
+            for (int i = 0; i < 10; i++)
+            {
+                rudder = ShipRudder.Apply(rudder, x, RudderSpeed, Dt);
+                vel -= 3000f * side * Dt;
+                wheel += vel * Dt;
+                helm.Step(Input(wheel, rudder, wheelVel: vel), out x, out _);
+            }
+            Assert.True(helm.Centering);
+        }
+
+        [Theory]
+        [InlineData(1f)]
+        [InlineData(-1f)]
+        public void CenterButton_GripKicksTowardTheHand(float side)
         {
             var helm = NewHelm();
-            helm.Step(Input(0.4f * FullDeg, 0.4f), out _, out _);
-            helm.Step(Input(0.4f * FullDeg, 0.4f, center: true), out _, out _);
-            helm.Step(Input(0.4f * FullDeg, 0.2f), out _, out _);
+            float rudder = 0.6f * side, wheel = rudder * FullDeg;
+            helm.Step(Input(wheel, rudder), out _, out _);
+            helm.Step(Input(wheel, rudder, center: true), out float x, out _);
+            for (int i = 0; i < 15 && helm.Centering; i++)
+            {
+                rudder = ShipRudder.Apply(rudder, x, RudderSpeed, Dt);
+                helm.Step(Input(wheel, rudder), out x, out _);
+            }
             Assert.False(helm.Centering);
+            Assert.Equal((int)side, helm.TakeReleaseKick());
+            Assert.Equal(0, helm.TakeReleaseKick());
+        }
+
+        [Theory]
+        [InlineData(1f, 0f)]
+        [InlineData(-1f, 0f)]
+        [InlineData(1f, 60f)]
+        [InlineData(-1f, 60f)]
+        public void CenterButton_GripNearHomeTakesOver(float side, float awaySpeed)
+        {
+            // The wheel trails the rudder home 22° behind, so centering arrives first; then the hand holds it there or turns it away.
+            var helm = NewHelm();
+            float rudder = 0.3f * side, wheel = rudder * FullDeg + 22f * side;
+            helm.Step(Input(wheel, rudder, center: true), out float x, out _);
+            while (helm.Centering)
+            {
+                rudder = ShipRudder.Apply(rudder, x, RudderSpeed, Dt);
+                float next = rudder * FullDeg + 22f * side;
+                float vel = (next - wheel) / Dt;
+                wheel = next;
+                helm.Step(Input(wheel, rudder, wheelVel: vel), out x, out _);
+            }
+            Assert.Equal(0f, rudder, 3);
+            Assert.False(helm.Synced);
+            int ticks = 0;
+            for (; ticks < 25 && !helm.Synced; ticks++)
+            {
+                wheel += awaySpeed * side * Dt;
+                helm.Step(Input(wheel, rudder, wheelVel: awaySpeed * side), out x, out _);
+                rudder = ShipRudder.Apply(rudder, x, RudderSpeed, Dt);
+            }
+            Assert.True(helm.Synced, "the held wheel never took over");
+            Assert.True(ticks <= 4, $"took {ticks} ticks");
+            Assert.Equal((int)side, helm.TakeReleaseKick());
+        }
+
+        [Theory]
+        [InlineData(1f)]
+        [InlineData(-1f)]
+        public void CenterButton_WheelAtTopSpeedDoesNotCancel(float side)
+        {
+            // A fast rudder outruns the real G29, which tops out around 450°/s hands-off.
+            const float fastRudder = 3f, topSpeed = 440f;
+            var helm = NewHelm();
+            float rudder = side, wheel = rudder * FullDeg;
+            HelmInput Fast(float w, float r, bool center = false, float vel = 0f) { var input = Input(w, r, center: center, wheelVel: vel); input.RudderSpeed = fastRudder; return input; }
+            helm.Step(Fast(wheel, rudder), out _, out _);
+            helm.Step(Fast(wheel, rudder, center: true), out float x, out _);
+            for (int i = 0; i < 25 && Math.Abs(rudder) > 0.001f; i++)
+            {
+                rudder = ShipRudder.Apply(rudder, x, fastRudder, Dt);
+                wheel -= topSpeed * side * Dt;
+                helm.Step(Fast(wheel, rudder, vel: -topSpeed * side), out x, out _);
+                Assert.True(helm.Centering || Math.Abs(rudder) < 0.001f, $"cancelled with rudder at {rudder * FullDeg:0}°");
+            }
         }
 
         [Fact]

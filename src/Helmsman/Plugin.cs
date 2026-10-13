@@ -28,6 +28,7 @@ namespace Helmsman
         private ConfigEntry<bool> _invertForce;
         private ConfigEntry<float> _idleCenterForce;
         private ConfigEntry<float> _idleCenterDelay;
+        private ConfigEntry<float> _releaseKick;
         private ConfigEntry<float> _idleAutocenter;
         private ConfigEntry<string> _speedUpButtons;
         private ConfigEntry<string> _speedDownButtons;
@@ -65,6 +66,7 @@ namespace Helmsman
             _invertForce = Config.Bind("ForceFeedback", "InvertForce", false, "Flip force direction if the wheel is pushed away from the rudder instead of toward it.");
             _idleCenterForce = Config.Bind("ForceFeedback", "IdleCenterForce", 0.5f, new ConfigDescription("Max force holding the wheel centered when not at the helm. 0 = use IdleAutocenter instead.", new AcceptableValueRange<float>(0f, 1f)));
             _idleCenterDelay = Config.Bind("ForceFeedback", "IdleCenterDelaySeconds", 3f, "After leaving the helm, the wheel stays free this long before it is centered.");
+            _releaseKick = Config.Bind("ForceFeedback", "ReleaseKickForce", 0.4f, new ConfigDescription("Brief push felt when gripping the wheel cancels centering (0 = off).", new AcceptableValueRange<float>(0f, 1f)));
             _idleAutocenter = Config.Bind("ForceFeedback", "IdleAutocenter", 0.25f, new ConfigDescription("Driver's built-in centering spring when not at the helm and IdleCenterForce is 0 (0 = limp).", new AcceptableValueRange<float>(0f, 1f)));
             _speedUpButtons = Config.Bind("Buttons", "SpeedUp", "4,2", "Comma-separated button numbers that raise sail speed (G29: right paddle = 4, circle = 2).");
             _speedDownButtons = Config.Bind("Buttons", "SpeedDown", "5,0", "Comma-separated button numbers that lower sail speed (G29: left paddle = 5, cross = 0).");
@@ -96,6 +98,7 @@ namespace Helmsman
             _wheelSettings.MinForce = _minForce.Value;
             _wheelSettings.InvertForce = _invertForce.Value;
             _wheelSettings.IdleAutocenter = _idleAutocenter.Value;
+            _wheelSettings.ReleaseKickForce = _releaseKick.Value;
             _wheelSettings.LogPath = _logPath.Value;
             _helmSettings.DegreesAtFullRudder = _degreesAtFullRudder.Value;
             _helmSettings.InvertSteering = _invertSteering.Value;
@@ -157,6 +160,7 @@ namespace Helmsman
             if (!_enabled.Value || ship != _helmShip) return;
             _helm.WheelTargetFor(_game.RudderValue(ship), _game.RudderInput(ship), _game.RudderSpeed(ship), out var angle, out var velocity);
             _wheel.Follow(angle, velocity);
+            _wheel.Kick(_helm.TakeReleaseKick());
         }
 
         private void OnDestroy()

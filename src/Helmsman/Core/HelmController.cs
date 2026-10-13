@@ -32,17 +32,30 @@ namespace Helmsman.Core
         private const float TightResyncDegrees = 2f;
         private const float WheelAtRestDegreesPerSecond = 20f;
         private const float TightRestDegrees = 5f;
+        // After centering, a wheel still swinging home faster than this would drag the rudder with it.
+        private const float TightResyncMaxDegreesPerSecond = 90f;
         private const float GrabAwayFromCenterDegreesPerSecond = 30f;
-        private const float GrabHoldMultiple = 3f;
+        // While centering, a wheel this far behind, under half the rudder's speed (and slow outright) and not speeding up for this long is being held.
+        private const float GripLagDegrees = 15f;
+        private const float GripSpeedFraction = 0.5f;
+        private const float GripMaxDegreesPerSecond = 150f;
+        private const float GripAccelerationDegreesPerSecondSquared = 1500f;
+        private const float GripSeconds = 0.06f;
+        // Once centering has reached straight, a wheel held this far off and slower than this toward the rudder is being held.
+        private const float SettleGripMaxDegreesPerSecond = 40f;
 
         private readonly HelmSettings _settings;
         private bool _synced;
         private bool _tightResync;
+        private bool _settleFirst;
         private bool _centering;
         private int _pendingSpeedSteps;
         private bool _injectedSpeedLastTick;
         private float _lastError = float.NaN;
         private int _centerFromSide;
+        private float _slowSeconds;
+        private float _lastTowardSpeed;
+        private int _releaseKick;
 
         public HelmController(HelmSettings settings) => _settings = settings;
 
@@ -52,15 +65,25 @@ namespace Helmsman.Core
         public bool Synced => _synced;
         public bool Centering => _centering;
 
+        // Returns and clears the wheel direction (+1 clockwise, -1, or 0) of a brief push signalling that a grip released the homing.
+        public int TakeReleaseKick()
+        {
+            int kick = _releaseKick;
+            _releaseKick = 0;
+            return kick;
+        }
+
         // Call when taking a (different) helm or leaving it.
         public void Reset()
         {
             _synced = false;
             _tightResync = false;
+            _settleFirst = false;
             _centering = false;
             _pendingSpeedSteps = 0;
             _injectedSpeedLastTick = false;
             _lastError = float.NaN;
+            _releaseKick = 0;
         }
 
         // Returns the dir.x / dir.z to pass to Ship.ApplyControlls this tick.
@@ -77,23 +100,41 @@ namespace Helmsman.Core
             {
                 _centering = true;
                 _centerFromSide = Math.Sign(rudder);
+                _slowSeconds = 0f;
+                _lastTowardSpeed = -input.WheelVelocity * Sign * _centerFromSide;
                 Log?.Invoke($"Centering from rudder {rudder * deg:0.0}°, wheel {input.WheelDegrees:0.0}°");
             }
             if (_centering)
             {
                 // The wheel trails the rudder home and may overshoot center; only pulling it back toward the starting side cancels.
-                float backSpeed = input.WheelVelocity * Math.Sign(input.WheelDegrees) * _centerFromSide;
+                float backSpeed = input.WheelVelocity * _centerFromSide;
                 bool pulledBack = backSpeed > GrabAwayFromCenterDegreesPerSecond && input.WheelDegrees * _centerFromSide > CenteredWheelDegrees;
-                bool homeward = -input.WheelVelocity * _centerFromSide > WheelAtRestDegreesPerSecond;
-                bool heldBack = !homeward && (target - rudder) * _centerFromSide * deg > _settings.SyncToleranceDegrees * GrabHoldMultiple;
+                float lag = (target - rudder) * _centerFromSide * deg;
+                float rudderRate = ShipRudder.MaxStep(rudder, input.RudderSpeed, input.DeltaTime) / input.DeltaTime * deg;
+                bool heldBack = Gripped(lag, -input.WheelVelocity * Sign * _centerFromSide, Math.Min(GripSpeedFraction * rudderRate, GripMaxDegreesPerSecond), input.DeltaTime);
                 bool arrived = Math.Abs(rudder) < 0.001f;
                 if (manualSteer || pulledBack || heldBack || arrived)
                 {
-                    string why = arrived ? "arrived" : manualSteer ? "keyboard steering" : pulledBack ? "wheel pulled back" : "wheel held back";
+                    string why = manualSteer ? "keyboard steering" : pulledBack ? "wheel pulled back" : heldBack ? "wheel gripped" : "arrived";
                     Log?.Invoke($"Centering ended ({why}): rudder {rudder * deg:0.0}°, wheel {input.WheelDegrees:0.0}° at {input.WheelVelocity:0}°/s");
                     _centering = false;
-                    // Hand back to the wheel only once it has caught up, so a wheel still swinging home can't drag the rudder.
-                    StartTightResync();
+                    if (pulledBack || heldBack)
+                    {
+                        // The wheel is in the player's hand, so it steers from where they hold it instead of being pulled to the rudder.
+                        _synced = true;
+                        _tightResync = false;
+                        _settleFirst = false;
+                        _lastError = float.NaN;
+                        _releaseKick = (int)Sign * _centerFromSide;
+                    }
+                    else
+                    {
+                        // Hand back to the wheel only once it has caught up and slowed, so a wheel still swinging home can't drag the rudder.
+                        StartTightResync();
+                        _settleFirst = true;
+                        _slowSeconds = 0f;
+                        _lastTowardSpeed = 0f;
+                    }
                 }
                 else
                 {
@@ -113,11 +154,16 @@ namespace Helmsman.Core
                 float tolerance = _tightResync ? TightResyncDegrees : _settings.SyncToleranceDegrees;
                 bool crossed = !float.IsNaN(_lastError) && Math.Sign(error) != Math.Sign(_lastError);
                 bool atRestNearby = Math.Abs(input.WheelVelocity) < WheelAtRestDegreesPerSecond && Math.Abs(error) <= (_tightResync ? TightRestDegrees : _settings.SyncToleranceDegrees);
-                if (!_synced && (Math.Abs(error) <= tolerance || crossed || atRestNearby))
+                bool settled = !_settleFirst || Math.Abs(input.WheelVelocity) < TightResyncMaxDegreesPerSecond;
+                // A wheel held off, or turned away, while it settles after centering is in the player's hand.
+                bool held = !_synced && _settleFirst && Gripped(Math.Abs(error), -input.WheelVelocity * Sign * Math.Sign(error), SettleGripMaxDegreesPerSecond, input.DeltaTime);
+                if (held) _releaseKick = Math.Sign(error) * (int)Sign;
+                if (!_synced && (held || settled && (Math.Abs(error) <= tolerance || crossed || atRestNearby)))
                 {
-                    Log?.Invoke($"Wheel took over ({(Math.Abs(error) <= tolerance ? "close" : crossed ? "crossed" : "at rest nearby")}): rudder {rudder * deg:0.0}°, wheel {input.WheelDegrees:0.0}°");
+                    Log?.Invoke($"Wheel took over ({(held ? "gripped" : Math.Abs(error) <= tolerance ? "close" : crossed ? "crossed" : "at rest nearby")}): rudder {rudder * deg:0.0}°, wheel {input.WheelDegrees:0.0}°");
                     _synced = true;
                     _tightResync = false;
+                    _settleFirst = false;
                 }
                 _lastError = error;
                 if (_synced)
@@ -154,10 +200,21 @@ namespace Helmsman.Core
             velocity = rate * scale;
         }
 
+        // True once the wheel has stayed lagDeg behind its target, slower than maxSpeed toward it and not speeding up, for GripSeconds.
+        private bool Gripped(float lagDeg, float towardSpeed, float maxSpeed, float dt)
+        {
+            float acceleration = (towardSpeed - _lastTowardSpeed) / dt;
+            _lastTowardSpeed = towardSpeed;
+            bool slow = lagDeg > GripLagDegrees && towardSpeed < maxSpeed && acceleration < GripAccelerationDegreesPerSecondSquared;
+            _slowSeconds = slow ? _slowSeconds + dt : 0f;
+            return _slowSeconds >= GripSeconds - 1e-4f;
+        }
+
         private void StartTightResync()
         {
             _synced = false;
             _tightResync = true;
+            _settleFirst = false;
             _lastError = float.NaN;
         }
 

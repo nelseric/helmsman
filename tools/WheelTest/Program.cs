@@ -1,10 +1,11 @@
 using System;
 using System.Globalization;
+using System.Linq;
 using System.Threading;
 using Helmsman.Core;
 using Helmsman.Wheel;
 
-// Standalone wheel test: `info`, `force <-1..1> [seconds]`, `hold <degrees> [seconds]`, `track [speed] [amplitude] [seconds] [fps]`, `sim [rudderSpeed] [degreesAtFullRudder] [log.csv]`, `kbd [pressSeconds]`, `center [rudderSpeed]`, or `coast [force] [seconds]`.
+// Standalone wheel test: `info`, `force <-1..1> [seconds]`, `hold <degrees> [seconds]`, `track [speed] [amplitude] [seconds] [fps]`, `sim [rudderSpeed] [degreesAtFullRudder] [log.csv]`, `kbd [pressSeconds]`, `center [rudderSpeed] [startDegrees]`, or `coast [force] [seconds]`.
 var settings = new WheelSettings { LogPath = Environment.GetEnvironmentVariable("HELMSMAN_LOG") ?? "", Backend = Environment.GetEnvironmentVariable("HELMSMAN_BACKEND") ?? WheelDevices.Auto };
 string mode = args.Length > 0 ? args[0] : "info";
 float Arg(int i, float fallback) => args.Length > i ? float.Parse(args[i], CultureInfo.InvariantCulture) : fallback;
@@ -132,22 +133,30 @@ if (mode == "sim" || mode == "kbd" || mode == "center")
     csv?.WriteLine("ms,wheel,rudderDeg,rudderRate,force");
     var simStart = DateTime.UtcNow;
     const float dt = 0.02f;
-    var helm = new HelmController(new HelmSettings { DegreesAtFullRudder = fullDeg });
+    var helm = new HelmController(new HelmSettings { DegreesAtFullRudder = fullDeg }) { Log = msg => Console.WriteLine("\n  " + msg) };
+    int[] centerButtons = { 6, 7, 10, 11 };
+    if (centerTest && args.Length > 2)
+    {
+        // Move to the starting angle first.
+        float startAngle = Arg(2, 0f);
+        for (int i = 0; i < 100 && !stop; i++) { controller.Follow(startAngle, 0f); Thread.Sleep(20); }
+    }
     float rudder = Math.Clamp(controller.AngleDegrees / fullDeg, -1f, 1f), rudderAtRelease = float.NaN;
     int tick = 0;
     while (!stop)
     {
         double t = (DateTime.UtcNow - simStart).TotalSeconds;
-        if (kbd && t > 0.5 + pressSeconds + 3) break;
+        if (kbd && t > 0.5 + pressSeconds + (centerTest ? 6 : 3)) break;
         float keyboard = kbd && t > 0.5 && t < 0.5 + pressSeconds ? 1f : 0f;
         if (kbd && keyboard == 0f && t >= 0.5 + pressSeconds + 1 && float.IsNaN(rudderAtRelease)) rudderAtRelease = rudder;
 
-        var input = new HelmInput { WheelDegrees = controller.AngleDegrees, WheelVelocity = controller.VelocityDegreesPerSecond, Rudder = rudder, RudderSpeed = rudderSpeed, DeltaTime = dt, ManualX = keyboard, CenterPressed = centerTest && tick == 25 };
+        var input = new HelmInput { WheelDegrees = controller.AngleDegrees, WheelVelocity = controller.VelocityDegreesPerSecond, Rudder = rudder, RudderSpeed = rudderSpeed, DeltaTime = dt, ManualX = keyboard, CenterPressed = centerTest ? tick == 25 : centerButtons.Sum(controller.TakePresses) > 0 };
         helm.Step(input, out float x, out _);
         float rudderInput = ShipRudder.Input(rudder, x);
         rudder = ShipRudder.Apply(rudder, x, rudderSpeed, dt);
         helm.WheelTargetFor(rudder, rudderInput, rudderSpeed, out float wheelTarget, out float wheelTargetVelocity);
         controller.Follow(wheelTarget, wheelTargetVelocity);
+        controller.Kick(helm.TakeReleaseKick());
         csv?.WriteLine(FormattableString.Invariant($"{(DateTime.UtcNow - simStart).TotalMilliseconds:0},{controller.AngleDegrees:0.00},{wheelTarget:0.00},{wheelTargetVelocity:0.0},{controller.LastForce:0.000}"));
         if (kbd && tick % 12 == 0)
             Console.WriteLine($"{t,5:0.00}s {(keyboard != 0 ? "D held " : "       ")} wheel {controller.AngleDegrees,7:0.0}°  rudder {rudder * fullDeg,7:0.0}°  force {controller.LastForce,6:+0.00;-0.00}");
@@ -166,5 +175,5 @@ if (mode == "sim" || mode == "kbd" || mode == "center")
     return 0;
 }
 
-Console.WriteLine("Usage: WheelTest [info | force <-1..1> [seconds] | hold <degrees> [seconds] | track [speed] [amplitude] [seconds] [fps] | sim [rudderSpeed] [degreesAtFullRudder] [log.csv] | kbd [pressSeconds] | center [rudderSpeed] | coast [force] [seconds]]");
+Console.WriteLine("Usage: WheelTest [info | force <-1..1> [seconds] | hold <degrees> [seconds] | track [speed] [amplitude] [seconds] [fps] | sim [rudderSpeed] [degreesAtFullRudder] [log.csv] | kbd [pressSeconds] | center [rudderSpeed] [startDegrees] | coast [force] [seconds]]");
 return 1;

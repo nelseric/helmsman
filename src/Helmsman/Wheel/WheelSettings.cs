@@ -14,6 +14,9 @@ namespace Helmsman.Wheel
         public float MinForce = 0.12f;
         public bool InvertForce = false;
         public float IdleAutocenter = 0.25f;
+        // Brief push the other way when a grip releases the homing, so it can be felt letting go.
+        public float ReleaseKickForce = 0.4f;
+        public float ReleaseKickSeconds = 0.05f;
         public string LogPath = "";
     }
 }

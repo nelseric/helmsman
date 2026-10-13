@@ -15,7 +15,7 @@ namespace Helmsman.Tests
         // USB and driver latency between computing a force and the wheel feeling it (4 × 2 ms).
         private const int OutputDelayTicks = 4;
 
-        private sealed class Sim
+        internal sealed class Sim
         {
             public readonly HelmController Helm = new HelmController(new HelmSettings { DegreesAtFullRudder = FullDeg });
             public readonly ForceModel Force = new ForceModel(new WheelSettings());
@@ -106,17 +106,47 @@ namespace Helmsman.Tests
         }
 
         [Theory]
-        [InlineData(0.5f)]
-        [InlineData(1f)]
-        [InlineData(2f)]
-        public void CenterButton_BringsRudderAndWheelHome(float rudderSpeed)
+        [InlineData(0.5f, 0.6f)]
+        [InlineData(1f, 0.6f)]
+        [InlineData(2f, 0.6f)]
+        [InlineData(0.5f, -0.6f)]
+        [InlineData(1f, -0.6f)]
+        [InlineData(2f, -1f)]
+        [InlineData(3f, 1f)]
+        [InlineData(3f, -1f)]
+        // These used to finish centering with the wheel still spinning, which then dragged the rudder off again.
+        [InlineData(1f, 1f)]
+        [InlineData(2f, 0.2f)]
+        [InlineData(3f, 0.6f)]
+        [InlineData(1f, 0.05f)]
+        public void CenterButton_BringsRudderAndWheelHome(float rudderSpeed, float startRudder)
         {
-            var sim = new Sim(0.6f, rudderSpeed);
+            var sim = new Sim(startRudder, rudderSpeed);
             sim.Run(0.1f, center: true);
             sim.Run(4f);
             // Within 6° of wheel is ~0.4° of actual rudder (Valheim's rudder turns ±30°); friction stops the wheel a little short.
             Assert.True(Math.Abs(sim.Rudder) * FullDeg < 6f, $"rudder stopped at {sim.Rudder * FullDeg:0.0}°");
             Assert.True(Math.Abs(sim.WheelAngle) < 6f, $"wheel stopped at {sim.WheelAngle:0.0}°");
+        }
+
+        [Theory]
+        [InlineData(0.5f, 0.6f)]
+        [InlineData(1f, 1f)]
+        [InlineData(1f, -1f)]
+        [InlineData(2f, -0.6f)]
+        public void CenterButton_GrippingTheWheelCancels(float rudderSpeed, float startRudder)
+        {
+            // Hands hold back nearly as hard as the force feedback pulls, so the wheel only creeps.
+            var sim = new Sim(startRudder, rudderSpeed);
+            sim.Run(0.02f, center: true);
+            for (int i = 0; i < 50 && sim.Helm.Centering; i++) sim.Run(0.02f, hand: 0.6f * Math.Sign(startRudder));
+            Assert.False(sim.Helm.Centering);
+            sim.Run(0.2f, hand: 0.6f * Math.Sign(startRudder));
+            Assert.True(sim.Helm.Synced, "the held wheel was still being pulled to the rudder");
+            sim.Run(1f);
+            Assert.True(Math.Abs(sim.Rudder) > Math.Abs(startRudder) * 0.4f, $"rudder kept centering to {sim.Rudder * FullDeg:0.0}°");
+            // The wheel steers from where it was held, rather than being pulled to wherever the rudder stopped.
+            Assert.True(Math.Abs(sim.Rudder * FullDeg - sim.WheelAngle) < 10f, $"rudder {sim.Rudder * FullDeg:0.0}° but wheel held at {sim.WheelAngle:0.0}°");
         }
 
         [Fact]

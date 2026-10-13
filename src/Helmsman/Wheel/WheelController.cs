@@ -28,6 +28,8 @@ namespace Helmsman.Wheel
         private volatile float _targetVelocity;
         private long _targetStamp;
         private long _seenTargetStamp;
+        private volatile float _kickForce;
+        private long _kickUntil;
 
         public WheelController(WheelSettings settings, Action<string> log)
         {
@@ -57,6 +59,14 @@ namespace Helmsman.Wheel
         }
 
         public void StopFollowing() => _follow = false;
+
+        // Overrides the force with a brief push in a direction (+1 clockwise, -1), for ReleaseKickSeconds.
+        public void Kick(int direction)
+        {
+            if (direction == 0 || _settings.ReleaseKickForce <= 0f) return;
+            _kickForce = Math.Sign(direction) * _settings.ReleaseKickForce;
+            Interlocked.Exchange(ref _kickUntil, Stopwatch.GetTimestamp() + (long)(_settings.ReleaseKickSeconds * Stopwatch.Frequency));
+        }
 
         // Returns and clears the number of presses of a button (numbered from 0) since the last call.
         public int TakePresses(int button) => button >= 0 && button < _presses.Length ? Interlocked.Exchange(ref _presses[button], 0) : 0;
@@ -151,6 +161,7 @@ namespace Helmsman.Wheel
                     bool newSample = stamp != _seenTargetStamp;
                     _seenTargetStamp = stamp;
                     float force = follow ? _force.Step(dt, angle, vel, _targetAngle, _targetVelocity, newSample, _forceCap) : 0f;
+                    if (follow && now < Interlocked.Read(ref _kickUntil)) force = _kickForce;
                     LastForce = force;
                     LastTarget = _force.Target;
 
