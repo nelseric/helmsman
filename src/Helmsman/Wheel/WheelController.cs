@@ -29,6 +29,8 @@ namespace Helmsman.Wheel
         private long _targetStamp;
         private long _seenTargetStamp;
         private volatile float _kickForce;
+        private volatile float _returnPerDegree;
+        private volatile float _returnFriction;
         private long _kickUntil;
 
         public WheelController(WheelSettings settings, Action<string> log)
@@ -59,6 +61,13 @@ namespace Helmsman.Wheel
         }
 
         public void StopFollowing() => _follow = false;
+
+        // Adds a pull toward center while following (see ForceModel.Step); zero turns it off.
+        public void SetReturnToCenter(float perDegree, float friction)
+        {
+            _returnPerDegree = perDegree;
+            _returnFriction = friction;
+        }
 
         // Overrides the force with a brief push in a direction (+1 clockwise, -1), for ReleaseKickSeconds.
         public void Kick(int direction)
@@ -160,7 +169,7 @@ namespace Helmsman.Wheel
                     long stamp = Interlocked.Read(ref _targetStamp);
                     bool newSample = stamp != _seenTargetStamp;
                     _seenTargetStamp = stamp;
-                    float force = follow ? _force.Step(dt, angle, vel, _targetAngle, _targetVelocity, newSample, _forceCap) : 0f;
+                    float force = follow ? _force.Step(dt, angle, vel, _targetAngle, _targetVelocity, newSample, _forceCap, _returnPerDegree, _returnFriction) : 0f;
                     if (follow && now < Interlocked.Read(ref _kickUntil)) force = _kickForce;
                     LastForce = force;
                     LastTarget = _force.Target;

@@ -289,6 +289,36 @@ namespace Helmsman.Tests
         }
 
         [Fact]
+        public void ReturnToCenter_OnlyWhileTheWheelSteers()
+        {
+            var helm = new HelmController(new HelmSettings { DegreesAtFullRudder = FullDeg, ReturnToCenter = true, ReturnToCenterForce = 0.2f, ReturnToCenterFullSpeed = 8f });
+            helm.ReturnToCenterFor(8f, out float perDegree, out _);
+            Assert.Equal(0f, perDegree);
+            helm.Step(Input(90f, 0.2f), out _, out _);
+            Assert.True(helm.Synced);
+            helm.ReturnToCenterFor(8f, out perDegree, out float friction);
+            Assert.Equal(0.2f / FullDeg, perDegree, 6);
+            Assert.Equal(1f, friction);
+            helm.ReturnToCenterFor(-4f, out perDegree, out _);
+            Assert.Equal(0.1f / FullDeg, perDegree, 6);
+            helm.ReturnToCenterFor(1f, out _, out friction);
+            Assert.Equal(3f / 8f, friction, 3);
+            helm.Step(Input(90f, 0.2f, center: true), out _, out _);
+            helm.ReturnToCenterFor(8f, out perDegree, out _);
+            Assert.Equal(0f, perDegree);
+        }
+
+        [Fact]
+        public void ReturnToCenter_OffByDefault()
+        {
+            var helm = NewHelm();
+            helm.Step(Input(90f, 0.2f), out _, out _);
+            helm.ReturnToCenterFor(8f, out float perDegree, out float friction);
+            Assert.Equal(0f, perDegree);
+            Assert.Equal(0f, friction);
+        }
+
+        [Fact]
         public void SpeedButtons_InjectOnePressPerStep_WithReleasedTickBetween()
         {
             var helm = NewHelm();

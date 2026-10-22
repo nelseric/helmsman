@@ -133,7 +133,9 @@ if (mode == "sim" || mode == "kbd" || mode == "center")
     csv?.WriteLine("ms,wheel,rudderDeg,rudderRate,force");
     var simStart = DateTime.UtcNow;
     const float dt = 0.02f;
-    var helm = new HelmController(new HelmSettings { DegreesAtFullRudder = fullDeg }) { Log = msg => Console.WriteLine("\n  " + msg) };
+    // HELMSMAN_RETURN=<force> turns on the tiller's return-to-center pull, as on a ship at full speed.
+    float returnForce = float.TryParse(Environment.GetEnvironmentVariable("HELMSMAN_RETURN"), NumberStyles.Float, CultureInfo.InvariantCulture, out float rf) ? rf : 0f;
+    var helm = new HelmController(new HelmSettings { DegreesAtFullRudder = fullDeg, ReturnToCenter = returnForce > 0f, ReturnToCenterForce = returnForce }) { Log = msg => Console.WriteLine("\n  " + msg) };
     int[] centerButtons = { 6, 7, 10, 11 };
     if (centerTest && args.Length > 2)
     {
@@ -155,6 +157,8 @@ if (mode == "sim" || mode == "kbd" || mode == "center")
         float rudderInput = ShipRudder.Input(rudder, x);
         rudder = ShipRudder.Apply(rudder, x, rudderSpeed, dt);
         helm.WheelTargetFor(rudder, rudderInput, rudderSpeed, out float wheelTarget, out float wheelTargetVelocity);
+        helm.ReturnToCenterFor(8f, out float returnPerDegree, out float returnFriction);
+        controller.SetReturnToCenter(returnPerDegree, returnFriction);
         controller.Follow(wheelTarget, wheelTargetVelocity);
         controller.Kick(helm.TakeReleaseKick());
         csv?.WriteLine(FormattableString.Invariant($"{(DateTime.UtcNow - simStart).TotalMilliseconds:0},{controller.AngleDegrees:0.00},{wheelTarget:0.00},{wheelTargetVelocity:0.0},{controller.LastForce:0.000}"));

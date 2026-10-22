@@ -17,16 +17,20 @@ namespace Helmsman.Tests
 
         internal sealed class Sim
         {
-            public readonly HelmController Helm = new HelmController(new HelmSettings { DegreesAtFullRudder = FullDeg });
+            public readonly HelmController Helm;
             public readonly ForceModel Force = new ForceModel(new WheelSettings());
             public float Rudder, WheelAngle, WheelVelocity;
+            // Forward speed in m/s, for the return-to-center pull.
+            public float ShipSpeed = 8f;
             private readonly float _rudderSpeed;
             private float _target, _targetVelocity, _gameClock;
             private bool _newSample;
             private readonly Queue<float> _outputDelay = new Queue<float>(new float[OutputDelayTicks]);
 
-            public Sim(float rudder, float rudderSpeed = 0.5f)
+            // returnToCenter: the tiller's pull at full rudder, or 0 for none.
+            public Sim(float rudder, float rudderSpeed = 0.5f, float returnToCenter = 0f)
             {
+                Helm = new HelmController(new HelmSettings { DegreesAtFullRudder = FullDeg, ReturnToCenter = returnToCenter > 0f, ReturnToCenterForce = returnToCenter });
                 _rudderSpeed = rudderSpeed;
                 Rudder = rudder;
                 WheelAngle = rudder * FullDeg;
@@ -50,7 +54,8 @@ namespace Helmsman.Tests
                         Helm.WheelTargetFor(Rudder, input, _rudderSpeed, out _target, out _targetVelocity);
                         _newSample = true;
                     }
-                    float force = Force.Step(WheelDt, WheelAngle, WheelVelocity, _target, _targetVelocity, _newSample, 0.7f);
+                    Helm.ReturnToCenterFor(ShipSpeed, out float returnPerDegree, out float returnFriction);
+                    float force = Force.Step(WheelDt, WheelAngle, WheelVelocity, _target, _targetVelocity, _newSample, 0.7f, returnPerDegree, returnFriction);
                     _newSample = false;
                     _outputDelay.Enqueue(force);
                     StepWheel(_outputDelay.Dequeue() + hand);
@@ -147,6 +152,49 @@ namespace Helmsman.Tests
             Assert.True(Math.Abs(sim.Rudder) > Math.Abs(startRudder) * 0.4f, $"rudder kept centering to {sim.Rudder * FullDeg:0.0}°");
             // The wheel steers from where it was held, rather than being pulled to wherever the rudder stopped.
             Assert.True(Math.Abs(sim.Rudder * FullDeg - sim.WheelAngle) < 10f, $"rudder {sim.Rudder * FullDeg:0.0}° but wheel held at {sim.WheelAngle:0.0}°");
+        }
+
+        [Theory]
+        [InlineData(0.5f, 0.7f, 0.1f)]
+        [InlineData(0.5f, -0.7f, 0.1f)]
+        [InlineData(1f, 0.3f, 0.05f)]
+        [InlineData(1f, -0.3f, 0.2f)]
+        [InlineData(2f, 1f, 0.1f)]
+        public void ReturnToCenter_ReleasedWheelDriftsHome(float rudderSpeed, float startRudder, float strength)
+        {
+            var sim = new Sim(startRudder, rudderSpeed, strength);
+            sim.Run(4f);
+            // Within 15° of wheel is 1° of Valheim's ±30° rudder.
+            Assert.True(Math.Abs(sim.Rudder) * FullDeg < 15f, $"rudder stopped at {sim.Rudder * FullDeg:0.0}°");
+            Assert.True(Math.Abs(sim.WheelAngle - sim.Rudder * FullDeg) < 10f, $"wheel {sim.WheelAngle:0.0}° left the rudder at {sim.Rudder * FullDeg:0.0}°");
+            Assert.False(sim.Helm.Centering);
+        }
+
+        [Fact]
+        public void ReturnToCenter_StandingStill_StaysPut()
+        {
+            var sim = new Sim(0.5f, returnToCenter: 0.2f) { ShipSpeed = 0f };
+            sim.Run(3f);
+            Assert.Equal(0.5f, sim.Rudder, 2);
+        }
+
+        [Fact]
+        public void ReturnToCenter_SlowShip_PullsButDoesNotMoveTheWheel()
+        {
+            // Too slow for the water to turn the wheel against its gearbox.
+            var sim = new Sim(0.5f, returnToCenter: 0.1f) { ShipSpeed = 0.5f };
+            sim.Run(3f);
+            Assert.True(Math.Abs(sim.Rudder - 0.5f) * FullDeg < 10f, $"rudder moved to {sim.Rudder * FullDeg:0.0}°");
+        }
+
+        [Fact]
+        public void ReturnToCenter_KeyboardTurnThenRelease_SettlesHome()
+        {
+            var sim = new Sim(0f, returnToCenter: 0.1f);
+            sim.Run(1f, keyboard: 1f);
+            Assert.True(sim.Rudder > 0.2f);
+            sim.Run(5f);
+            Assert.True(Math.Abs(sim.Rudder) * FullDeg < 15f, $"rudder stopped at {sim.Rudder * FullDeg:0.0}°");
         }
 
         [Fact]

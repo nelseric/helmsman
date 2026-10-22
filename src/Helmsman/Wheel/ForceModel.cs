@@ -10,6 +10,11 @@ namespace Helmsman.Wheel
         private const float MinForceRampDegrees = 2f;
         private const float MinForceFadeDegreesPerSecond = 30f;
         private const float MaxReturnDegreesPerSecond = 300f;
+        private const float ReturnToCenterDeadbandDegrees = 3f;
+        // G29 gearbox friction to overcome so a released wheel actually comes home: to start it, then to keep it sliding.
+        private const float ReturnBreakawayForce = 0.18f;
+        private const float ReturnSlidingForce = 0.08f;
+        private const float ReturnFrictionRampDegrees = 20f;
 
         private readonly WheelSettings _settings;
         private float _tracked;
@@ -29,8 +34,20 @@ namespace Helmsman.Wheel
             return along > Math.Abs(tv) ? -_settings.Damping * (vel - tv) : 0f;
         }
 
+        // Pulls toward center beyond a small deadband, plus friction help (none while the wheel is turned outward) so the pull alone sets how a released wheel returns.
+        private static float ReturnToCenter(float angle, float vel, float perDegree, float frictionScale)
+        {
+            float off = Math.Abs(angle) - ReturnToCenterDeadbandDegrees;
+            if (perDegree <= 0f || off <= 0f) return 0f;
+            float homeSpeed = -vel * Math.Sign(angle);
+            float stillness = Math.Max(0f, 1f - Math.Abs(vel) / MinForceFadeDegreesPerSecond);
+            float friction = homeSpeed < -MinForceFadeDegreesPerSecond ? 0f : ReturnSlidingForce + (ReturnBreakawayForce - ReturnSlidingForce) * stillness;
+            return -Math.Sign(angle) * (perDegree * off + friction * frictionScale * Math.Min(1f, off / ReturnFrictionRampDegrees));
+        }
+
         // Advances by dt and returns the force (-cap..cap, positive = clockwise); newSample is true when the game published (target, targetVelocity) since the last step.
-        public float Step(float dt, float angle, float vel, float target, float targetVelocity, bool newSample, float cap)
+        // returnPerDegree adds a pull toward center, like water pushing a tiller straight, with returnFriction (0..1) of the friction help that lets it move a released wheel.
+        public float Step(float dt, float angle, float vel, float target, float targetVelocity, bool newSample, float cap, float returnPerDegree = 0f, float returnFriction = 1f)
         {
             // Game updates arrive in frame-timed bursts, so advance our own copy of the rudder at its (exact) rate and only nudge it toward each update.
             float tv = targetVelocity;
@@ -51,7 +68,10 @@ namespace Helmsman.Wheel
             float force = spring + Damping(vel, tv);
             // Overcome static gearbox friction: fades in over the first few degrees (no buzz at the target) and out as the wheel moves.
             float minForceScale = Math.Min(1f, Math.Abs(err) / MinForceRampDegrees) * Math.Max(0f, 1f - Math.Abs(vel) / MinForceFadeDegreesPerSecond);
+            // While returning to center the rudder chases the wheel, so don't help pull a wheel that leads it home back out.
+            if (returnPerDegree > 0f && Math.Sign(err) == Math.Sign(angle)) minForceScale = 0f;
             force += Math.Sign(err) * _settings.MinForce * minForceScale;
+            force += ReturnToCenter(angle, vel, returnPerDegree, returnFriction);
             return Math.Max(-cap, Math.Min(cap, force));
         }
     }

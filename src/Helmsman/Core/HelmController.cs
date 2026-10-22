@@ -7,6 +7,10 @@ namespace Helmsman.Core
         public float DegreesAtFullRudder = 450f;
         public bool InvertSteering;
         public float SyncToleranceDegrees = 15f;
+        public bool ReturnToCenter;
+        // Pull toward center at full rudder and ReturnToCenterFullSpeed or faster.
+        public float ReturnToCenterForce = 0.1f;
+        public float ReturnToCenterFullSpeed = 8f;
     }
 
     // One physics tick of input to the helm.
@@ -188,6 +192,16 @@ namespace Helmsman.Core
                 _pendingSpeedSteps -= step;
                 _injectedSpeedLastTick = true;
             }
+        }
+
+        // The tiller's pull toward center for the wheel's force model: per wheel degree, and the share of friction help (0..1). Only while the wheel steers.
+        public void ReturnToCenterFor(float shipSpeed, out float perDegree, out float friction)
+        {
+            float speedShare = _settings.ReturnToCenterFullSpeed > 0f ? Math.Min(1f, Math.Abs(shipSpeed) / _settings.ReturnToCenterFullSpeed) : 1f;
+            bool active = _settings.ReturnToCenter && _synced && !_centering && speedShare > 0f;
+            perDegree = active ? _settings.ReturnToCenterForce * speedShare / _settings.DegreesAtFullRudder : 0f;
+            // Below a third of full speed the water is too weak to turn a released wheel against its gearbox.
+            friction = active ? Math.Min(1f, speedShare * 3f) : 0f;
         }
 
         // The wheel angle and velocity (degrees, degrees/s) that correspond to the rudder after this tick.

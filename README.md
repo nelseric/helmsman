@@ -84,6 +84,7 @@ Settings live in `BepInEx/config/helmsman.wheel.cfg`, created on first launch. B
 | Steering | `DegreesAtFullRudder` | `450` | Wheel angle from center that equals full rudder. Lower for a quicker wheel |
 | Steering | `InvertSteering` | `false` | Swap left and right |
 | Steering | `SyncToleranceDegrees` | `15` | How close the wheel must get to the rudder before it takes over at the helm |
+| Camera | `ViewFollowsShip` | `true` | At the helm, turn the view with the ship so it keeps facing the same way relative to the deck |
 | ForceFeedback | `MaxForce` | `0.7` | Force cap, as a fraction of the wheel's peak torque |
 | ForceFeedback | `Stiffness` | `0.03` | Force per degree the wheel is away from the rudder |
 | ForceFeedback | `Damping` | `0.0015` | Resistance per °/s of turning faster than the rudder |
@@ -94,9 +95,14 @@ Settings live in `BepInEx/config/helmsman.wheel.cfg`, created on first launch. B
 | ForceFeedback | `IdleCenterDelaySeconds` | `3` | How long after leaving the helm before the wheel recenters |
 | ForceFeedback | `IdleAutocenter` | `0.25` | The driver's own centering spring, used when `IdleCenterForce` is `0` |
 | ForceFeedback | `ReleaseKickForce` | `0.4` | Brief push felt when gripping the wheel cancels centering; `0` turns it off |
+| ForceFeedback | `ReturnToCenter` | `false` | At the helm, pull the wheel gently toward straight while the ship moves, like water on a tiller; a released wheel drifts home |
+| ForceFeedback | `ReturnToCenterForce` | `0.1` | That pull at full rudder and full speed |
+| ForceFeedback | `ReturnToCenterFullSpeed` | `8` | Ship speed (m/s) at which the pull is full; it fades to nothing at a standstill |
 | Buttons | `SpeedUp` | `4,2` | Button numbers that raise sail speed |
 | Buttons | `SpeedDown` | `5,0` | Button numbers that lower sail speed |
 | Buttons | `Center` | `6,7,10,11` | Button numbers that straighten the rudder. Grip the wheel to stop partway |
+| Buttons | `ToggleViewFollowsShip` | `3` | Button numbers that turn `ViewFollowsShip` on or off (G29: triangle) |
+| Buttons | `ToggleReturnToCenter` | `1` | Button numbers that turn `ReturnToCenter` on or off (G29: square) |
 | Debug | `LogPath` | *(empty)* | Write a CSV of wheel, rudder target and force (~500 lines/s) to this file |
 
 **Feel:** if the wheel feels heavy, lower `Stiffness` or `MaxForce`. If it doesn't settle on the rudder, raise `MinForce` slightly. If it buzzes at rest, raise `DeadbandDegrees` or lower `MinForce`.

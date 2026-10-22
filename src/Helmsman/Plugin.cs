@@ -33,17 +33,26 @@ namespace Helmsman
         private ConfigEntry<string> _speedUpButtons;
         private ConfigEntry<string> _speedDownButtons;
         private ConfigEntry<string> _centerButtons;
+        private ConfigEntry<string> _viewToggleButtons;
         private ConfigEntry<string> _logPath;
+        private ConfigEntry<bool> _viewFollowsShip;
+        private ConfigEntry<bool> _returnToCenter;
+        private ConfigEntry<float> _returnToCenterForce;
+        private ConfigEntry<float> _returnToCenterFullSpeed;
+        private ConfigEntry<string> _returnToggleButtons;
 
         private readonly WheelSettings _wheelSettings = new WheelSettings();
         private readonly HelmSettings _helmSettings = new HelmSettings();
         private int[] _speedUpCodes = new int[0];
         private int[] _speedDownCodes = new int[0];
         private int[] _centerCodes = new int[0];
+        private int[] _viewToggleCodes = new int[0];
+        private int[] _returnToggleCodes = new int[0];
 
         private GameApi _game;
         private WheelController _wheel;
         private HelmController _helm;
+        private readonly ViewFollower _view = new ViewFollower();
         private Harmony _harmony;
         private object _helmShip;
         private float _idleSince = float.NegativeInfinity;
@@ -57,6 +66,7 @@ namespace Helmsman
             _fallbackRange = Config.Bind("Device", "FallbackRangeDegrees", 900f, "Wheel rotation range when the driver doesn't report one (always the case with SDL). Must match the range set in the wheel's driver software.");
             _degreesAtFullRudder = Config.Bind("Steering", "DegreesAtFullRudder", 450f, "Wheel angle (from center) that equals full rudder.");
             _invertSteering = Config.Bind("Steering", "InvertSteering", false, "Swap left/right steering.");
+            _viewFollowsShip = Config.Bind("Camera", "ViewFollowsShip", true, "At the helm, turn the view with the ship so it keeps facing the same way relative to the deck.");
             _syncTolerance = Config.Bind("Steering", "SyncToleranceDegrees", 15f, "When taking the helm, the wheel must come within this many degrees of the rudder before it takes over.");
             _maxForce = Config.Bind("ForceFeedback", "MaxForce", 0.7f, new ConfigDescription("Maximum force (fraction of the wheel's peak torque).", new AcceptableValueRange<float>(0f, 1f)));
             _stiffness = Config.Bind("ForceFeedback", "Stiffness", 0.03f, "Force per degree the wheel is away from the rudder.");
@@ -64,6 +74,9 @@ namespace Helmsman
             _deadband = Config.Bind("ForceFeedback", "DeadbandDegrees", 0.5f, "Position error ignored by the spring, to avoid buzzing.");
             _minForce = Config.Bind("ForceFeedback", "MinForce", 0.12f, new ConfigDescription("Extra force to overcome wheel friction once it is a few degrees off the rudder.", new AcceptableValueRange<float>(0f, 0.5f)));
             _invertForce = Config.Bind("ForceFeedback", "InvertForce", false, "Flip force direction if the wheel is pushed away from the rudder instead of toward it.");
+            _returnToCenter = Config.Bind("ForceFeedback", "ReturnToCenter", false, "At the helm, pull the wheel gently toward straight while the ship moves, like water on a tiller; a released wheel drifts home.");
+            _returnToCenterForce = Config.Bind("ForceFeedback", "ReturnToCenterForce", 0.1f, new ConfigDescription("ReturnToCenter's pull at full rudder and full speed.", new AcceptableValueRange<float>(0f, 0.5f)));
+            _returnToCenterFullSpeed = Config.Bind("ForceFeedback", "ReturnToCenterFullSpeed", 8f, "Ship speed (m/s) at which ReturnToCenter pulls fully; it fades to nothing at a standstill.");
             _idleCenterForce = Config.Bind("ForceFeedback", "IdleCenterForce", 0.5f, new ConfigDescription("Max force holding the wheel centered when not at the helm. 0 = use IdleAutocenter instead.", new AcceptableValueRange<float>(0f, 1f)));
             _idleCenterDelay = Config.Bind("ForceFeedback", "IdleCenterDelaySeconds", 3f, "After leaving the helm, the wheel stays free this long before it is centered.");
             _releaseKick = Config.Bind("ForceFeedback", "ReleaseKickForce", 0.4f, new ConfigDescription("Brief push felt when gripping the wheel cancels centering (0 = off).", new AcceptableValueRange<float>(0f, 1f)));
@@ -71,6 +84,8 @@ namespace Helmsman
             _speedUpButtons = Config.Bind("Buttons", "SpeedUp", "4,2", "Comma-separated button numbers that raise sail speed (G29: right paddle = 4, circle = 2).");
             _speedDownButtons = Config.Bind("Buttons", "SpeedDown", "5,0", "Comma-separated button numbers that lower sail speed (G29: left paddle = 5, cross = 0).");
             _centerButtons = Config.Bind("Buttons", "Center", "6,7,10,11", "Comma-separated button numbers that swing the rudder (and wheel) back to straight (G29: R2 = 6, L2 = 7, R3 = 10, L3 = 11).");
+            _viewToggleButtons = Config.Bind("Buttons", "ToggleViewFollowsShip", "3", "Comma-separated button numbers that turn Camera.ViewFollowsShip on or off (G29: triangle = 3).");
+            _returnToggleButtons = Config.Bind("Buttons", "ToggleReturnToCenter", "1", "Comma-separated button numbers that turn ForceFeedback.ReturnToCenter on or off (G29: square = 1).");
             _logPath = Config.Bind("Debug", "LogPath", "", "If set, writes a CSV of wheel position, rudder target and force (~500 lines/s) to this file.");
 
             ApplySettings();
@@ -106,6 +121,11 @@ namespace Helmsman
             _speedUpCodes = ButtonCodes.Parse(_speedUpButtons.Value);
             _speedDownCodes = ButtonCodes.Parse(_speedDownButtons.Value);
             _centerCodes = ButtonCodes.Parse(_centerButtons.Value);
+            _viewToggleCodes = ButtonCodes.Parse(_viewToggleButtons.Value);
+            _returnToggleCodes = ButtonCodes.Parse(_returnToggleButtons.Value);
+            _helmSettings.ReturnToCenter = _returnToCenter.Value;
+            _helmSettings.ReturnToCenterForce = _returnToCenterForce.Value;
+            _helmSettings.ReturnToCenterFullSpeed = _returnToCenterFullSpeed.Value;
         }
 
         private int TakePresses(int[] codes)
@@ -118,7 +138,14 @@ namespace Helmsman
         private void Update()
         {
             if (_game == null) return;
-            if (_enabled.Value && _game.ControlledShip() != null) return;
+            var ship = _enabled.Value ? _game.ControlledShip() : null;
+            if (ship != null)
+            {
+                FollowShipWithView(ship);
+                return;
+            }
+            _view.Reset();
+            _wheel.SetReturnToCenter(0f, 0f);
 
             if (_helmShip != null) _idleSince = Time.unscaledTime;
             _helmShip = null;
@@ -127,6 +154,27 @@ namespace Helmsman
             bool delayOver = Time.unscaledTime - _idleSince >= _idleCenterDelay.Value;
             if (_enabled.Value && _idleCenterForce.Value > 0f && delayOver) _wheel.Follow(0f, 0f, _idleCenterForce.Value);
             else _wheel.StopFollowing();
+        }
+
+        private void FollowShipWithView(object ship)
+        {
+            if (TakePresses(_viewToggleCodes) > 0)
+            {
+                _viewFollowsShip.Value = !_viewFollowsShip.Value;
+                _game.ShowMessage(_viewFollowsShip.Value ? "View follows the ship" : "View fixed");
+            }
+            if (TakePresses(_returnToggleCodes) > 0)
+            {
+                _returnToCenter.Value = !_returnToCenter.Value;
+                _game.ShowMessage(_returnToCenter.Value ? "Tiller pulls toward straight" : "Tiller stays put");
+            }
+            if (!_viewFollowsShip.Value)
+            {
+                _view.Reset();
+                return;
+            }
+            float turn = _view.Step(GameApi.Heading(ship));
+            if (turn != 0f) _game.TurnView(turn);
         }
 
         internal void BeforeShipControls(object ship, ref Vector3 dir)
@@ -159,6 +207,8 @@ namespace Helmsman
         {
             if (!_enabled.Value || ship != _helmShip) return;
             _helm.WheelTargetFor(_game.RudderValue(ship), _game.RudderInput(ship), _game.RudderSpeed(ship), out var angle, out var velocity);
+            _helm.ReturnToCenterFor(_game.Speed(ship), out float returnPerDegree, out float returnFriction);
+            _wheel.SetReturnToCenter(returnPerDegree, returnFriction);
             _wheel.Follow(angle, velocity);
             _wheel.Kick(_helm.TakeReleaseKick());
         }
